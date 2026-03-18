@@ -1,7 +1,5 @@
 # 🌱 GramSathi AI — Production-Ready Rural Empowerment Platform
 
-> Full-stack, real-time AI platform for rural Self-Help Groups (SHGs) — 100% working, every button functional.
-
 ---
 
 ## ⚡ Quick Start
