@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: gramsathi-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: DB_PATH
+        value: /opt/render/project/src/gramsathi.db
+      - key: UPLOAD_DIR
+        value: /opt/render/project/src/uploads
+      - key: FRONTEND_URL
+        value: https://gram-sathi-ai-yuy9.vercel.app
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: GEMINI_API_KEY
+        sync: false
