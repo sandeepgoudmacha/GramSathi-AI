@@ -5,7 +5,7 @@ import { motion } from 'framer-motion'
 import { Plus, Search, Loader2, CheckCircle, TrendingUp, ExternalLink } from 'lucide-react'
 import { AppShell } from '@/components/layout/AppShell'
 import { StatCard, CreditGauge, ProgressBar, DataTable, EmptyState, Spinner, Modal, Tabs, Timeline, Field, InfoBanner } from '@/components/ui/index'
-import { api, dashboardApi, loansApi, savingsApi, schemesApi, skillsApi, trainingApi, aiApi, creditApi } from '@/services/api'
+import { api, dashboardApi, loansApi, savingsApi, schemesApi, skillsApi, trainingApi, aiApi, creditApi, resolveImageUrl } from '@/services/api'
 import { inr, fdate, ago, loanStatusBadge, schemeStatusBadge, creditColor } from '@/utils/helpers'
 import { useAuthStore } from '@/store/index'
 import { useForm } from 'react-hook-form'
@@ -123,11 +123,11 @@ export function DashboardPage() {
           </div>
           <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
             {d.my_products.slice(0,5).map((p: any) => {
-                const firstImg = (() => { try { return JSON.parse(p.images||'[]')[0] } catch { return null } })()
+                const firstImg = resolveImageUrl((() => { try { return JSON.parse(p.images||'[]')[0] } catch { return null } })())
                 return (
                 <div key={p.id} className="text-center">
                   <div className="text-3xl mb-1">
-                    {firstImg && typeof firstImg === 'string' && firstImg.startsWith('/uploads')
+                    {firstImg && typeof firstImg === 'string' && (firstImg.startsWith('http') || firstImg.startsWith('/uploads'))
                       ? <img src={firstImg} className="mx-auto w-20 h-20 object-cover rounded" alt={p.name} />
                       : (firstImg || '📦')
                     }
