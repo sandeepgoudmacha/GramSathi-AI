@@ -27,6 +27,7 @@ export function AIAssistant() {
   })
   const [ttsSpeaker, setTtsSpeaker] = useState<string>(()=>{ try{ return localStorage.getItem('tts_speaker') || 'Divya' }catch(e){return 'Divya'} })
   const [ttsEmotion, setTtsEmotion] = useState<string>(()=>{ try{ return localStorage.getItem('tts_emotion') || 'Neutral' }catch(e){return 'Neutral'} })
+  const [speechLang, setSpeechLang] = useState<string>('en-IN') // Speech recognition language
 
   // Load conversation history once when opened
   const { data: history } = useQuery({
@@ -54,17 +55,64 @@ export function AIAssistant() {
       const Rec = w.SpeechRecognition || w.webkitSpeechRecognition
       if (Rec) {
         const r = new Rec()
-        r.interimResults = false
+        r.continuous = false
+        r.interimResults = false // CRITICAL: don't process interim results
         r.maxAlternatives = 1
+        r.language = 'en-IN' // Default to English for better recognition
+        r.onstart = () => {
+          console.log('[speech] Recognition started on language:', r.language)
+          setRecording(true)
+        }
         r.onresult = (e:any) => {
-          const t = e.results?.[0]?.[0]?.transcript
-          if (t) { setInput(t); send(t) }
+          // CRITICAL FIX: Only process final results, ignore interim results
+          if (!e.results || e.results.length === 0) {
+            console.warn('[speech] No results returned')
+            return
+          }
+
+          // Get the LAST result (most recent)
+          const lastResultIndex = e.results.length - 1
+          const result = e.results[lastResultIndex]
+          
+          // Only process if this is FINAL result
+          if (!result.isFinal) {
+            console.debug('[speech] Interim result (ignoring), transcript:', result[0]?.transcript)
+            return
+          }
+
+          const t = result[0]?.transcript?.trim()
+          const conf = result[0]?.confidence || 0
+          
+          if (t && t.length > 0) { 
+            console.log(`[speech] FINAL transcription (confidence: ${(conf*100).toFixed(0)}%):`, t)
+            setInput(t)
+            // Queue send after state updates
+            setTimeout(() => send(t), 0)
+          } else {
+            console.warn('[speech] Final result but empty transcript')
+          }
           setRecording(false)
         }
-        r.onend = () => setRecording(false)
+        r.onerror = (e:any) => {
+          console.error('[speech] Error:', e.error)
+          setRecording(false)
+          if (e.error === 'network') {
+            setMessages(p => [...p, { role:'assistant', content:'Network error during speech recognition. Please check your connection.' }])
+          } else if (e.error === 'no-speech') {
+            setMessages(p => [...p, { role:'assistant', content:'No speech detected. Please try speaking again.' }])
+          } else if (e.error === 'not-allowed') {
+            setMessages(p => [...p, { role:'assistant', content:'Microphone permission denied. Please allow microphone access in browser settings.' }])
+          }
+        }
+        r.onend = () => {
+          console.log('[speech] Recognition ended')
+          setRecording(false)
+        }
         recognitionRef.current = r
       }
-    }catch(e){}
+    }catch(e){
+      console.error('[speech] initialization failed:', e)
+    }
   },[])
 
   // small helper to generate descriptive caption for Parler-TTS
@@ -122,15 +170,32 @@ export function AIAssistant() {
 
   const toggleRecording = () => {
     const r = recognitionRef.current
-    if (!r) return
-    if (recording) { try{ r.stop() }catch(e){}; setRecording(false); }
-    else { try{ r.lang = navigator.language || 'hi-IN'; r.start(); setRecording(true) }catch(e){ console.warn('start recog',e); setRecording(false) } }
+    if (!r) {
+      setMessages(p => [...p, { role:'assistant', content:'Speech recognition not supported in your browser. Please use text input instead.' }])
+      return
+    }
+    if (recording) { 
+      try{ r.stop() }catch(e){}
+      setRecording(false)
+    }
+    else { 
+      try{
+        r.language = speechLang
+        console.log('[speech] Starting recognition with language:', r.language)
+        r.start()
+        setRecording(true)
+      }catch(e){ 
+        console.error('[speech] error starting:', e)
+        setRecording(false)
+        setMessages(p => [...p, { role:'assistant', content:`Mic error: ${e?.message || 'Unknown'}. Please try again.` }])
+      } 
+    }
   }
 
   // helper to map short language codes to SpeechRecognition locale (e.g., 'hi' -> 'hi-IN')
   function langCodeToLocale(code: string) {
     const m: Record<string,string> = { hi: 'hi-IN', en: 'en-IN', te: 'te-IN', ta: 'ta-IN', kn: 'kn-IN', ml: 'ml-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', or: 'or-IN' }
-    return m[code] || (navigator.language || 'en-IN')
+    return m[code] || 'en-IN' // Default to English for better support
   }
 
   // Start/stop recording but ensure recognition.lang matches detected language
@@ -138,11 +203,17 @@ export function AIAssistant() {
     const r = recognitionRef.current
     if (!r) return
     try {
-      const locale = langCodeToLocale(preferredCode || (detectLanguage(input || '').code))
-      r.lang = locale
+      const code = preferredCode || (detectLanguage(input || '').code)
+      const locale = langCodeToLocale(code)
+      setSpeechLang(locale)
+      r.language = locale
+      console.log('[speech] Setting language to:', locale)
       r.start()
       setRecording(true)
-    } catch (e) { console.warn('start recog', e); setRecording(false) }
+    } catch (e) { 
+      console.error('[speech] start error:', e)
+      setRecording(false)
+    }
   }
 
   if (!user) return null
@@ -203,16 +274,18 @@ export function AIAssistant() {
             </div>
 
             {/* Input */}
-            <div className="p-2.5 border-t border-gray-100 flex gap-2">
-              <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()}
-                placeholder="Ask anything..." className="flex-1 text-xs border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brand-400 bg-gray-50"/>
-              <button onClick={() => { if (recognitionRef.current && !recording) startRecordingWithLang(); else toggleRecording() }} title="Speak" className={cn('w-8 h-8 rounded-xl flex items-center justify-center transition-colors shrink-0', recording ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-700') }>
-                {recording ? '●' : '🎤'}
-              </button>
-              <button onClick={() => send()} disabled={!input.trim()||loading}
-                className="w-8 h-8 bg-brand-500 text-white rounded-xl flex items-center justify-center disabled:opacity-50 hover:bg-brand-600 transition-colors shrink-0">
-                {loading ? <Loader2 size={13} className="animate-spin"/> : <Send size={13}/>}
-              </button>
+            <div className="p-2.5 border-t border-gray-100 space-y-2">
+              <div className="flex gap-2">
+                <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()}
+                  placeholder="Ask anything..." className="flex-1 text-xs border border-gray-200 rounded-xl px-3 py-2 outline-none focus:border-brand-400 bg-gray-50"/>
+                <button onClick={toggleRecording} title={`Speak (${speechLang})`} className={cn('w-8 h-8 rounded-xl flex items-center justify-center transition-colors shrink-0 text-sm', recording ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-700 hover:bg-gray-200') }>
+                  {recording ? '🔴' : '🎤'}
+                </button>
+                <button onClick={() => send()} disabled={!input.trim()||loading}
+                  className="w-8 h-8 bg-brand-500 text-white rounded-xl flex items-center justify-center disabled:opacity-50 hover:bg-brand-600 transition-colors shrink-0">
+                  {loading ? <Loader2 size={13} className="animate-spin"/> : <Send size={13}/>}
+                </button>
+              </div>
             </div>
             <ParlerTTSModal />
           </motion.div>

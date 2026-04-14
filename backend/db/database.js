@@ -82,6 +82,8 @@ function initDb() {
       duration_months INTEGER DEFAULT 12,
       interest_rate REAL DEFAULT 7.0,
       collateral TEXT DEFAULT 'None',
+      bank_passbook_path TEXT,
+      aadhaar_path TEXT,
       status TEXT DEFAULT 'pending' CHECK(status IN ('pending','coordinator_review','officer_review','approved','rejected','disbursed','closed')),
       ai_credit_score REAL DEFAULT 50,
       ai_recommendation TEXT DEFAULT '',
@@ -275,6 +277,12 @@ function initDb() {
       db.prepare("ALTER TABLE products ADD COLUMN images TEXT DEFAULT '[]'").run();
     }
   } catch (e) { console.warn('Could not add images column:', e.message) }
+  try {
+    // Ensure loan document columns exist (for databases created before these were added)
+    const loanCols = db.prepare("PRAGMA table_info('loans')").all().map(r => r.name);
+    if (!loanCols.includes('bank_passbook_path')) db.prepare("ALTER TABLE loans ADD COLUMN bank_passbook_path TEXT").run();
+    if (!loanCols.includes('aadhaar_path')) db.prepare("ALTER TABLE loans ADD COLUMN aadhaar_path TEXT").run();
+  } catch (e) { console.warn('Could not add loan document columns:', e.message) }
   try {
     // Ensure TTS preference columns exist on users
     const ucols = db.prepare("PRAGMA table_info('users')").all().map(r => r.name);

@@ -29,5 +29,16 @@ app.use('/api', (req, res) => res.status(404).json({ detail: `Not found: ${req.m
 app.use((err, req, res, next) => { console.error(err.message); res.status(err.status||500).json({ detail: err.message||'Internal error' }); });
 initDb();
 initWS(server);
-server.listen(PORT, () => console.log(`\n🌱 GramSathi AI Backend running on http://localhost:${PORT}\n   API: http://localhost:${PORT}/api/v1\n   WS:  ws://localhost:${PORT}/ws\n`));
+
+// Health check for required dependencies
+const requiredEnvs = { GROQ_API_KEY: 'Groq', GEMINI_API_KEY: 'Gemini' };
+const missingKeys = Object.entries(requiredEnvs)
+  .filter(([key]) => !process.env[key])
+  .map(([, name]) => name);
+if (missingKeys.length > 0) {
+  console.warn(`⚠️  Missing API keys for: ${missingKeys.join(', ')}. AI features will have limited functionality. Set GROQ_API_KEY or GEMINI_API_KEY in .env`);
+}
+
+server.listen(PORT, () => console.log(`\n🌱 GramSathi AI Backend running on http://localhost:${PORT}\n   API: http://localhost:${PORT}/api/v1\n   WS:  ws://localhost:${PORT}/ws\n${missingKeys.length ? `⚠️  AI Provider Status: ${missingKeys.length === 0 ? '✅ Ready' : '⚠️  Limited (missing ' + missingKeys.join(', ') + ')'}\n` : ''}`));
+
 module.exports = { app, server };

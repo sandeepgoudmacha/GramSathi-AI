@@ -209,6 +209,8 @@ export function AppShell({ children, title, subtitle }: { children: React.ReactN
     setOnNotification(() => {
       qc.invalidateQueries({ queryKey: ['notifications'] })
       qc.invalidateQueries({ queryKey: ['dashboard'] })
+      qc.invalidateQueries({ queryKey: ['my-loans'] })
+      qc.invalidateQueries({ queryKey: ['loan-detail'] })
     })
     return () => setOnNotification(null)
   }, [])

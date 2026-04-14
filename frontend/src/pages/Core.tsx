@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { motion } from 'framer-motion'
 import { Plus, Search, Loader2, CheckCircle, TrendingUp, ExternalLink } from 'lucide-react'
+import axios from 'axios'
 import { AppShell } from '@/components/layout/AppShell'
 import { StatCard, CreditGauge, ProgressBar, DataTable, EmptyState, Spinner, Modal, Tabs, Timeline, Field, InfoBanner } from '@/components/ui/index'
 import { dashboardApi, loansApi, savingsApi, schemesApi, skillsApi, trainingApi, aiApi, creditApi } from '@/services/api'
@@ -150,6 +151,7 @@ export function DashboardPage() {
 export function FinancialPage() {
   const [tab, setTab] = useState('savings')
   const [loanModal, setLoanModal] = useState(false)
+  const [loanDetail, setLoanDetail] = useState<any>(null)
   const [savingsOpen, setSavingsOpen] = useState(false)
   const [svAmount, setSvAmount] = useState('')
   const [svDate, setSvDate] = useState('')
@@ -163,7 +165,16 @@ export function FinancialPage() {
   const { data: cs } = useQuery({ queryKey:['credit-score'], queryFn:()=>creditApi.score().then(r=>r.data) })
 
   const applyMutation = useMutation({
-    mutationFn: (d:any) => loansApi.apply({ ...d, amount:parseFloat(d.amount), duration_months:parseInt(d.duration_months)||12 }),
+    mutationFn: (d:any) => {
+      const formData = new FormData();
+      formData.append('amount', d.amount);
+      formData.append('purpose', d.purpose);
+      formData.append('duration_months', d.duration_months || 12);
+      formData.append('collateral', d.collateral || 'None');
+      if (d.bank_passbook?.[0]) formData.append('bank_passbook', d.bank_passbook[0]);
+      if (d.aadhaar?.[0]) formData.append('aadhaar', d.aadhaar[0]);
+      return axios.post('/api/v1/loans/apply', formData, { headers: { 'Content-Type': 'multipart/form-data', 'Authorization': `Bearer ${localStorage.getItem('access_token')}` } });
+    },
     onSuccess: () => { toast.success('Loan application submitted!'); setLoanModal(false); reset(); qc.invalidateQueries({queryKey:['my-loans']}); qc.invalidateQueries({queryKey:['dashboard']}) },
     onError: (e:any) => toast.error(e.response?.data?.detail || 'Failed to apply'),
   })
@@ -271,7 +282,7 @@ export function FinancialPage() {
                 <DataTable loading={loansLoading} emptyMsg="No loan applications yet"
                   headers={['Loan #','Amount','Purpose','AI Score','Status','Date']}
                   rows={(loans||[]).map((l:any) => [
-                    <span className="font-mono text-xs text-gray-500">{l.loan_number}</span>,
+                    <button onClick={()=>setLoanDetail(l)} className="font-mono text-xs text-blue-600 hover:underline cursor-pointer">{l.loan_number}</button>,
                     <span className="font-bold text-brand-600">{inr(l.amount)}</span>,
                     <span className="text-xs text-gray-600 max-w-[120px] truncate block">{l.purpose}</span>,
                     <span className={`font-bold ${creditColor(l.ai_credit_score||0).text}`}>{l.ai_credit_score?.toFixed(0)||'—'}</span>,
@@ -320,11 +331,86 @@ export function FinancialPage() {
               <option>Fixed Deposit receipt</option>
             </select>
           </Field>
+          <div className="border-t pt-4">
+            <h4 className="text-sm font-semibold text-gray-700 mb-3">📄 Required Documents</h4>
+            <Field label="Bank Passbook" required>
+              <input {...register('bank_passbook',{required:'Bank passbook required'})} type="file" accept=".pdf,.jpg,.jpeg,.png" className="input"/>
+              <p className="text-xs text-gray-500 mt-1">PDF or image (JPG/PNG)</p>
+              {errors.bank_passbook && <p className="text-xs text-red-500 mt-1">{errors.bank_passbook.message}</p>}
+            </Field>
+            <Field label="Aadhaar Card" required>
+              <input {...register('aadhaar',{required:'Aadhaar card required'})} type="file" accept=".pdf,.jpg,.jpeg,.png" className="input"/>
+              <p className="text-xs text-gray-500 mt-1">PDF or image (JPG/PNG)</p>
+              {errors.aadhaar && <p className="text-xs text-red-500 mt-1">{errors.aadhaar.message}</p>}
+            </Field>
+          </div>
           {cs && <div className="bg-brand-50 border border-brand-200 rounded-xl p-3 text-xs text-brand-700"><p className="font-semibold">Your eligibility: up to {inr(cs.eligible_amount)}</p><p className="text-brand-600 mt-0.5">Interest: 7% p.a. · Processing: 3-5 business days</p></div>}
           <button type="submit" disabled={applyMutation.isPending} className="btn-primary w-full">
             {applyMutation.isPending?<><Loader2 size={15} className="animate-spin"/>Submitting…</>:'Submit Application'}
           </button>
         </form>
+      </Modal>
+
+      {/* Loan Detail Modal */}
+      <Modal open={!!loanDetail} onClose={()=>setLoanDetail(null)} title={`Loan Details - ${loanDetail?.loan_number}`}>
+        {loanDetail && (
+          <div className="space-y-4">
+            <div className="bg-gray-50 rounded-xl p-4">
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <p className="text-xs text-gray-500">Amount</p>
+                  <p className="font-bold text-lg text-brand-600">{inr(loanDetail.amount)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Duration</p>
+                  <p className="font-bold text-lg">{loanDetail.duration_months} months</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Purpose</p>
+                <p className="text-sm text-gray-700 mt-1">{loanDetail.purpose}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <div>
+                  <p className="text-xs text-gray-500">AI Credit Score</p>
+                  <p className={`font-bold text-sm ${creditColor(loanDetail.ai_credit_score||0).text}`}>{loanDetail.ai_credit_score?.toFixed(0)||'—'}/100</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Status</p>
+                  <span className={`badge ${loanStatusBadge(loanDetail.status)}`}>{loanDetail.status.replace(/_/g,' ')}</span>
+                </div>
+              </div>
+            </div>
+
+            {loanDetail.status === 'approved' && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+                <p className="text-sm font-semibold text-green-800 mb-2">✅ Loan Approved!</p>
+                <p className="text-xs text-green-700">Your loan has been approved. Disbursement will be processed within 1-2 business days.</p>
+                {loanDetail.officer_remarks && <p className="text-xs text-green-600 mt-2"><strong>Officer Notes:</strong> {loanDetail.officer_remarks}</p>}
+              </div>
+            )}
+
+            {loanDetail.status === 'rejected' && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                <p className="text-sm font-semibold text-red-800 mb-2">❌ Application Not Approved</p>
+                {loanDetail.rejection_reason ? (
+                  <p className="text-xs text-red-700"><strong>Reason:</strong> {loanDetail.rejection_reason}</p>
+                ) : (
+                  <p className="text-xs text-red-700">Your application does not meet the current criteria. Please contact your coordinator for guidance.</p>
+                )}
+              </div>
+            )}
+
+            {['pending','coordinator_review','officer_review'].includes(loanDetail.status) && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <p className="text-sm font-semibold text-blue-800 mb-2">⏳ Application Under Review</p>
+                <p className="text-xs text-blue-700">Your application is being reviewed. You will be notified once a decision is made.</p>
+              </div>
+            )}
+
+            <button onClick={()=>setLoanDetail(null)} className="btn-secondary w-full">Close</button>
+          </div>
+        )}
       </Modal>
     </AppShell>
   )
@@ -391,6 +477,20 @@ export function SchemesPage() {
   const CATS = ['All','Finance','Business','Housing','Livelihood','Agriculture','Health','Employment']
   const CAT_BADGE: any = { Finance:'badge-purple', Business:'badge-blue', Housing:'badge-amber', Livelihood:'badge-green', Agriculture:'badge-green', Health:'badge-red', Employment:'badge-teal' }
 
+  const [aiCheckModal, setAiCheckModal] = useState<any>(null)
+  const [aiResult, setAiResult] = useState<string>('')
+  const aiCheckMutation = useMutation({
+    mutationFn: (id:number) => aiApi.schemeCheck({scheme_id: id}),
+    onSuccess: (r) => setAiResult(r.data.reply),
+    onError: (e:any) => toast.error(e.response?.data?.detail||'Failed')
+  })
+
+  const handleAiCheck = (s:any) => {
+    setAiCheckModal(s)
+    setAiResult('')
+    aiCheckMutation.mutate(s.id)
+  }
+
   return (
     <AppShell title="Government Schemes" subtitle="AI-matched schemes for your profile">
       <Tabs tabs={[{id:'browse',label:'All Schemes'},{id:'my',label:`My Applications${myApps?.length?` (${myApps.length})`:''}`}]} active={tab} onChange={setTab}/>
@@ -419,6 +519,7 @@ export function SchemesPage() {
                     <h3 className="text-sm font-bold text-gray-800 mb-1.5">{s.name}</h3>
                     <p className="text-xs text-gray-500 leading-relaxed mb-3 line-clamp-2">{s.benefits}</p>
                     {s.max_benefit_amount && <p className="text-xs font-bold text-brand-600 mb-3">Max: {inr(s.max_benefit_amount)}</p>}
+                    <button onClick={()=>handleAiCheck(s)} className="btn-secondary w-full mb-2 btn-sm font-semibold text-purple-700 border-purple-200 bg-purple-50 hover:bg-purple-100 flex justify-center items-center gap-1">✨ Smart Check Eligibility</button>
                     <div className="flex gap-2">
                       {alreadyApplied
                         ? <span className="btn-secondary btn-sm w-full justify-center text-center text-xs">✓ Already Applied</span>
@@ -464,9 +565,9 @@ export function SchemesPage() {
             </div>
             <div>
               <p className="text-sm font-semibold mb-2">Required Documents</p>
-              {(JSON.parse(applyModal.required_documents||'[]')).map((d:string) => (
+              {applyModal.required_documents && Array.isArray(JSON.parse(applyModal.required_documents||'[]')) ? (JSON.parse(applyModal.required_documents||'[]')).map((d:string) => (
                 <div key={d} className="flex items-center gap-2 text-xs text-gray-600 mb-1.5"><CheckCircle size={12} className="text-brand-500 shrink-0"/>{d}</div>
-              ))}
+              )) : null}
             </div>
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
               ⚠️ Ensure you have all documents ready. You can only apply once per scheme.
@@ -476,6 +577,30 @@ export function SchemesPage() {
             </button>
           </div>
         )}
+      </Modal>
+
+      <Modal open={!!aiCheckModal} onClose={()=>{setAiCheckModal(null);setAiResult('')}} title={`AI Assessment: ${aiCheckModal?.name}`}>
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 mb-2 pb-3 border-b border-gray-100">
+            <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-xl">✨</div>
+            <div>
+              <p className="text-sm font-bold text-gray-800">GramSathi Smart Assistant</p>
+              <p className="text-xs text-gray-400">Personalized matched for you</p>
+            </div>
+          </div>
+          {aiCheckMutation.isPending && !aiResult && (
+             <div className="flex flex-col items-center justify-center py-8 text-purple-600 text-center">
+               <Loader2 size={34} className="animate-spin mb-3 mx-auto"/>
+               <p className="text-sm font-semibold animate-pulse">Analyzing your profile & scheme constraints...</p>
+               <p className="text-xs mt-1 text-purple-400">This checks your income, occupation, and district against the data.</p>
+             </div>
+          )}
+          {aiResult && (
+             <div className="bg-gradient-to-r from-purple-50 to-brand-50 border border-purple-100 shadow-inner p-5 rounded-xl text-sm leading-relaxed text-gray-800 whitespace-pre-wrap">
+               {aiResult}
+             </div>
+          )}
+        </div>
       </Modal>
     </AppShell>
   )
@@ -492,7 +617,8 @@ export function SkillsPage() {
 
   const { data: mySkills } = useQuery({ queryKey:['my-skills'], queryFn:()=>skillsApi.my().then(r=>r.data) })
   const { data: allSkills } = useQuery({ queryKey:['all-skills'], queryFn:()=>skillsApi.all().then(r=>r.data) })
-  const { data: training } = useQuery({ queryKey:['training'], queryFn:()=>trainingApi.list().then(r=>r.data) })
+  const { data: training } = useQuery({ queryKey:['training'], queryFn:()=>trainingApi.list().then(r=>r.data), staleTime:30000 })
+  const { data: myEnrollments } = useQuery({ queryKey:['my-enrollments'], queryFn:()=>trainingApi.myEnrollments().then(r=>r.data), staleTime:30000 })
 
   const addMutation = useMutation({
     mutationFn: (d:any) => skillsApi.add({ skill_id:parseInt(d.skill_id), proficiency:d.proficiency, years_experience:parseFloat(d.years_experience)||0 }),
@@ -505,15 +631,19 @@ export function SkillsPage() {
   })
   const enrollMutation = useMutation({
     mutationFn: (id:number) => trainingApi.enroll(id),
-    onSuccess: (_, id) => { toast.success('Enrolled successfully!'); qc.invalidateQueries({queryKey:['training']}) },
-    onError: (e:any) => toast.error(e.response?.data?.detail||'Failed'),
+    onSuccess: (_, id) => { 
+      toast.success('Enrolled successfully! 🎓');
+      qc.invalidateQueries({queryKey:['training']});
+      qc.invalidateQueries({queryKey:['my-enrollments']});
+    },
+    onError: (e:any) => toast.error(e.response?.data?.detail||'Failed to enroll'),
   })
 
   const profBadge: any = { advanced:'badge-green', intermediate:'badge-blue', beginner:'badge-amber' }
 
   return (
     <AppShell title="Skills & Training" subtitle="Manage your skills and discover free training programs">
-      <Tabs tabs={[{id:'my',label:'My Skills'},{id:'training',label:'Training Programs'}]} active={tab} onChange={setTab}/>
+      <Tabs tabs={[{id:'my',label:'My Skills'},{id:'training',label:'Training Programs'},{id:'my-enrollments',label:'My Enrollments'}]} active={tab} onChange={setTab}/>
 
       {tab==='my' && (
         <div className="grid lg:grid-cols-2 gap-5">
@@ -560,21 +690,75 @@ export function SkillsPage() {
             <DataTable
               headers={['Program','Provider','Duration','Mode','Seats Left','Start Date','Action']}
               rows={(training||[]).map((t:any) => [
-                <span className="font-semibold">{t.title}</span>,
-                <span className="text-gray-600">{t.provider||'—'}</span>,
-                `${t.duration_days} days`,
-                <span className={`badge ${t.mode==='online'?'badge-blue':'badge-green'}`}>{t.mode}</span>,
-                <span className={t.max_participants-t.enrolled_count <= 3 ? 'text-red-500 font-semibold' : 'text-gray-600'}>{t.max_participants-t.enrolled_count} left</span>,
-                t.start_date ? fdate(t.start_date) : 'Flexible',
+                <div className="font-semibold"><span>{t.title}</span>{t.description && <p className="text-xs text-gray-400 mt-0.5">{t.description.slice(0,50)}</p>}</div>,
+                <span className="text-gray-600 text-sm">{t.provider||'NRLM'}</span>,
+                <span className="text-sm font-medium">{t.duration_days} days</span>,
+                <span className={`badge ${t.mode==='online'?'badge-blue':t.mode==='hybrid'?'badge-purple':'badge-green'}`}>{t.mode}</span>,
+                <span className={`font-semibold ${(t.seats_left || (t.max_participants - t.enrolled_count)) <= 3 ? 'text-red-500' : 'text-green-600'}`}>{t.seats_left || (t.max_participants - t.enrolled_count)} left</span>,
+                <span className="text-sm">{t.start_date ? fdate(t.start_date) : 'Flexible'}</span>,
                 t.is_enrolled
-                  ? <span className="badge badge-green">✓ Enrolled</span>
-                  : <button onClick={()=>enrollMutation.mutate(t.id)} disabled={enrollMutation.isPending||(t.max_participants-t.enrolled_count)<=0} className="btn-primary btn-sm">
-                      {enrollMutation.isPending?<Loader2 size={12} className="animate-spin"/>:'Enroll'}
-                    </button>,
+                  ? <span className="badge badge-green text-xs">✓ Enrolled</span>
+                  : ((t.seats_left || (t.max_participants - t.enrolled_count)) <= 0
+                    ? <span className="text-xs text-gray-400">Full</span>
+                    : <button 
+                        onClick={()=>enrollMutation.mutate(t.id)} 
+                        disabled={enrollMutation.isPending} 
+                        className="btn-primary btn-sm text-xs"
+                      >
+                        {enrollMutation.isPending?<><Loader2 size={11} className="animate-spin"/>Enrolling</>:'Enroll'}
+                      </button>
+                  ),
               ])}
-              emptyMsg="No training programs available"
+              emptyMsg="🎓 No training programs available at the moment"
             />
           </div>
+        </div>
+      )}
+
+      {tab==='my-enrollments' && (
+        <div className="space-y-4">
+          {(!myEnrollments || myEnrollments.length === 0) ? (
+            <EmptyState 
+              icon="🎓" 
+              title="No enrollments yet" 
+              message="Explore training programs and enroll to get started"
+              action={<button onClick={()=>setTab('training')} className="btn-primary btn-sm">Explore Programs</button>}
+            />
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {(myEnrollments||[]).map((e:any) => (
+                <div key={e.id} className="card p-5 hover:shadow-lg transition-shadow">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <h4 className="font-bold text-gray-900">{e.title}</h4>
+                      <p className="text-xs text-gray-400 mt-1">{e.provider}</p>
+                    </div>
+                    <span className={`badge ${e.status==='completed'?'badge-green':e.status==='cancelled'?'badge-red':'badge-blue'}`}>{e.status}</span>
+                  </div>
+                  <div className="space-y-2.5 mb-4">
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <span className="text-base">📅</span>
+                      <span>{e.start_date ? fdate(e.start_date) : 'Flexible schedule'}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <span className="text-base">⏱️</span>
+                      <span>{e.duration_days} days</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <span className="text-base">{e.mode==='online'?'💻':e.mode==='hybrid'?'🔀':'📍'}</span>
+                      <span>{e.mode.charAt(0).toUpperCase() + e.mode.slice(1)} {e.location && `- ${e.location}`}</span>
+                    </div>
+                  </div>
+                  {e.description && (
+                    <p className="text-xs text-gray-500 mb-3 leading-relaxed">{e.description}</p>
+                  )}
+                  <div className="flex items-center gap-2 text-xs text-gray-400 pt-3 border-t border-gray-50">
+                    <span>Enrolled: {new Date(e.enrolled_at).toLocaleDateString('en-IN')}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

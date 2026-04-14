@@ -389,13 +389,17 @@ export function CoordinatorPage() {
   const [tab, setTab] = useState('members')
   const [savingsModal, setSavingsModal] = useState<any>(null)
   const [selectedLoan, setSelectedLoan] = useState<any>(null)
-  const [action, setAction] = useState<'approve'|'reject'|'forward'>('approve')
+  const [action, setAction] = useState<'reject'|'forward'>('forward')
   const [trainingModal, setTrainingModal] = useState(false)
+  const [selectedTraining, setSelectedTraining] = useState<any>(null)
   const qc = useQueryClient()
   const { register, handleSubmit, reset } = useForm()
   const { register: tReg, handleSubmit: tSubmit, reset: tReset } = useForm()
 
   const { data: d } = useQuery({ queryKey:['dashboard','coordinator'], queryFn:()=>dashboardApi.coordinator().then(r=>r.data), staleTime:30000, refetchInterval:60000 })
+  const { data: trainingPrograms } = useQuery({ queryKey:['coordinator-training-programs'], queryFn:()=>trainingApi.allPrograms().then(r=>r.data), staleTime:30000 })
+  const { data: selectedEnrollments } = useQuery({ queryKey:['training-enrollments',selectedTraining?.id], queryFn:()=>selectedTraining?.id ? trainingApi.programEnrollments(selectedTraining.id).then(r=>r.data) : Promise.resolve(null), enabled:!!selectedTraining?.id, staleTime:30000 })
+  const { data: loanDetail } = useQuery({ queryKey:['loan-detail',selectedLoan?.id], queryFn:()=>loansApi.get(selectedLoan.id).then(r=>r.data), enabled:!!selectedLoan?.id, staleTime:10000 })
 
   const savingsMutation = useMutation({
     mutationFn: (d:any) => savingsApi.record({...d, amount:parseFloat(d.amount), member_id:parseInt(d.member_id)}),
@@ -414,7 +418,7 @@ export function CoordinatorPage() {
   })
   const trainingMutation = useMutation({
     mutationFn: (d:any) => trainingApi.create({...d, duration_days:parseInt(d.duration_days), max_participants:parseInt(d.max_participants)||20}),
-    onSuccess: () => { toast.success('Training program created!'); setTrainingModal(false); tReset(); qc.invalidateQueries({queryKey:['training']}) },
+    onSuccess: () => { toast.success('Training program created!'); setTrainingModal(false); tReset(); qc.invalidateQueries({queryKey:['training']}); qc.invalidateQueries({queryKey:['coordinator-training-programs']}); qc.invalidateQueries({queryKey:['dashboard','coordinator']}) },
     onError: (e:any) => toast.error(e.response?.data?.detail||'Failed'),
   })
   const schemeReviewMutation = useMutation({
@@ -432,7 +436,7 @@ export function CoordinatorPage() {
         <StatCard label="Total Members" value={d?.total_members||0} icon="👥" trend="up" color="green"/>
         <StatCard label="Total Savings" value={inr(d?.total_savings||0)} icon="💰" trend="up" color="blue"/>
         <StatCard label="Pending Reviews" value={d?.pending_loans||0} icon="📋" color="amber"/>
-        <StatCard label="Training Programs" value={d?.trainings?.length||0} icon="🎓" color="purple"/>
+        <StatCard label="Training Programs" value={trainingPrograms?.length||0} icon="🎓" color="purple" onClick={()=>setTab('training')}/>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4 mb-5">
@@ -513,13 +517,12 @@ export function CoordinatorPage() {
               <span className="text-xs text-gray-600 max-w-[100px] truncate block">{l.purpose}</span>,
               <span className={`font-bold text-sm ${creditColor(l.ai_credit_score||0).text}`}>{l.ai_credit_score?.toFixed(0)||'—'}</span>,
               <span className={`badge ${loanStatusBadge(l.status)}`}>{l.status.replace(/_/g,' ')}</span>,
-              (['pending','coordinator_review','officer_review'].includes(l.status)) ? (
+              (l.status === 'pending' || l.status === 'coordinator_review') ? (
                 <div className="flex gap-1.5">
-                  <button onClick={()=>{setSelectedLoan(l);setAction('approve')}} className="btn-primary btn-sm">✓ Approve</button>
+                  <button onClick={()=>{setSelectedLoan(l);setAction('forward')}} className="btn-primary btn-sm">📤 Forward</button>
                   <button onClick={()=>{setSelectedLoan(l);setAction('reject')}} className="btn-danger btn-sm">✗ Reject</button>
-                  <button onClick={()=>forwardMutation.mutate({id:l.id,action:'forward'})} disabled={forwardMutation.isPending} className="btn-secondary btn-sm">Forward</button>
                 </div>
-              ) : <span className="text-xs text-gray-400">—</span>,
+              ) : <span className={`badge ${loanStatusBadge(l.status)}`}>{l.status.replace(/_/g,' ')}</span>,
             ])}
             emptyMsg="No loan applications"
           />
@@ -591,22 +594,124 @@ export function CoordinatorPage() {
 
       {tab==='training' && (
         <div className="space-y-4">
-          <div className="flex justify-end"><button onClick={()=>setTrainingModal(true)} className="btn-primary btn-sm gap-1"><Plus size={13}/>Create Program</button></div>
-          <div className="card">
-            <DataTable
-              headers={['Program','Provider','Duration','Mode','Enrolled','Start Date','Status']}
-              rows={(d?.trainings||[]).map((t:any)=>[
-                <span className="font-semibold">{t.title}</span>,
-                t.provider||'—',
-                `${t.duration_days} days`,
-                <span className={`badge ${t.mode==='online'?'badge-blue':'badge-green'}`}>{t.mode}</span>,
-                `${t.enrolled_count}/${t.max_participants}`,
-                t.start_date?fdate(t.start_date):'Flexible',
-                t.is_active?<span className="badge badge-green">Active</span>:<span className="badge badge-gray">Inactive</span>,
-              ])}
-              emptyMsg="No training programs"
-            />
-          </div>
+          {!selectedTraining ? (
+            <>
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="section-title">🎓 Training Programs Management</h3>
+                  <p className="text-sm text-gray-500 mt-1">Create and manage training programs for your SHG members</p>
+                </div>
+                <button onClick={()=>setTrainingModal(true)} className="btn-primary gap-2"><Plus size={16}/>Create New Program</button>
+              </div>
+              
+              {(!trainingPrograms || trainingPrograms.length === 0) ? (
+                <div className="card p-8 text-center border-2 border-dashed border-brand-300">
+                  <div className="text-5xl mb-3">🎓</div>
+                  <h3 className="font-semibold text-gray-800 mb-2 text-lg">No training programs yet</h3>
+                  <p className="text-sm text-gray-500 mb-4">Create your first training program to help SHG members develop new skills</p>
+                  <button onClick={()=>setTrainingModal(true)} className="btn-primary gap-2 mx-auto"><Plus size={16}/>Create Your First Program</button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid lg:grid-cols-3 gap-4 mb-4">
+                    <div className="card p-4 bg-green-50 border-l-4 border-green-500">
+                      <p className="text-xs text-gray-600 uppercase font-semibold">Total Programs</p>
+                      <p className="text-3xl font-bold text-green-600">{trainingPrograms?.length||0}</p>
+                    </div>
+                    <div className="card p-4 bg-blue-50 border-l-4 border-blue-500">
+                      <p className="text-xs text-gray-600 uppercase font-semibold">Total Enrollments</p>
+                      <p className="text-3xl font-bold text-blue-600">{(trainingPrograms||[]).reduce((sum:number, p:any)=>sum+p.enrolled_count, 0)}</p>
+                    </div>
+                    <div className="card p-4 bg-purple-50 border-l-4 border-purple-500">
+                      <p className="text-xs text-gray-600 uppercase font-semibold">Total Capacity</p>
+                      <p className="text-3xl font-bold text-purple-600">{(trainingPrograms||[]).reduce((sum:number, p:any)=>sum+p.max_participants, 0)}</p>
+                    </div>
+                  </div>
+                  <div className="card">
+                    <div className="px-5 py-4 border-b border-gray-100 flex justify-between items-center">
+                      <h3 className="section-title">Active Programs ({trainingPrograms?.length||0})</h3>
+                      <button onClick={()=>setTrainingModal(true)} className="btn-secondary btn-sm gap-1"><Plus size={13}/>Add Program</button>
+                    </div>
+                    <div className="grid gap-3 p-5">
+                      {(trainingPrograms||[]).map((t:any) => (
+                        <div key={t.id} onClick={()=>setSelectedTraining(t)} className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:border-brand-400 hover:bg-brand-50 hover:shadow-md cursor-pointer transition-all">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start gap-3">
+                              <div className="text-2xl mt-1">🎓</div>
+                              <div className="flex-1">
+                                <h4 className="font-semibold text-gray-900">{t.title}</h4>
+                                <p className="text-xs text-gray-500 mt-1">{t.provider} • {t.duration_days} days • <span className="inline-block bg-gray-100 px-2 py-0.5 rounded text-xs font-medium capitalize">{t.mode}</span></p>
+                                <div className="flex gap-4 mt-2">
+                                  <span className="text-xs"><strong className="font-semibold text-gray-700">{t.enrolled_count}</strong><span className="text-gray-400">/{t.max_participants}</span> enrolled</span>
+                                  {t.start_date && <span className="text-xs text-gray-500">📅 {fdate(t.start_date)}</span>}
+                                  {t.location && <span className="text-xs text-gray-500">📍 {t.location}</span>}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4 ml-4 shrink-0">
+                            <div className="text-right">
+                              <ProgressBar value={t.enrollment_percentage} showPct={true} color={t.enrollment_percentage > 80 ? 'red' : t.enrollment_percentage > 50 ? 'amber' : 'green'} />
+                              <p className="text-xs font-semibold text-gray-600 mt-1">{t.seats_left} seats</p>
+                            </div>
+                            <span className="text-2xl">→</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <div className="space-y-4">
+              <button onClick={()=>setSelectedTraining(null)} className="btn-secondary btn-sm gap-1">← Back to All Programs</button>
+              <div className="card">
+                <div className="px-5 py-4 border-b border-gray-100">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <h3 className="section-title flex items-center gap-2"><span>🎓</span>{selectedTraining.title}</h3>
+                      <p className="text-sm text-gray-600 mt-2">
+                        <strong>Provider:</strong> {selectedTraining.provider} • 
+                        <strong className="ml-2">Duration:</strong> {selectedTraining.duration_days} days • 
+                        <strong className="ml-2">Mode:</strong> <span className="inline-block bg-gray-100 px-2 py-0.5 rounded text-xs font-medium capitalize">{selectedTraining.mode}</span>
+                      </p>
+                      {selectedTraining.location && <p className="text-sm text-gray-600 mt-1"><strong>📍 Location:</strong> {selectedTraining.location}</p>}
+                      {selectedTraining.start_date && <p className="text-sm text-gray-600"><strong>📅 Start Date:</strong> {fdate(selectedTraining.start_date)}</p>}
+                      {selectedTraining.description && <p className="text-sm text-gray-700 mt-2 italic">{selectedTraining.description}</p>}
+                    </div>
+                    <div className="text-right bg-brand-50 rounded-lg p-4 shrink-0 border border-brand-200">
+                      <p className="text-3xl font-bold text-brand-600">{(selectedEnrollments?.enrollments||[]).length}</p>
+                      <p className="text-xs text-gray-600 mt-1">Members</p>
+                      <p className="text-xs font-semibold text-gray-400 mt-2">/ {selectedTraining.max_participants} capacity</p>
+                      <div className="mt-3 w-48"><ProgressBar value={Math.round((((selectedEnrollments?.enrollments||[]).length) / selectedTraining.max_participants) * 100)} showPct={true} color="brand" /></div>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-5 py-4 border-b border-gray-100">
+                  <h4 className="font-semibold text-gray-800 mb-1">📋 Enrolled Members ({(selectedEnrollments?.enrollments||[]).length})</h4>
+                  <p className="text-xs text-gray-500">SHG members who have registered for this training</p>
+                </div>
+                {(selectedEnrollments?.enrollments||[]).length === 0 ? (
+                  <div className="p-8 text-center text-gray-400 bg-gray-50">
+                    <p className="text-sm">✨ No members enrolled yet. They will appear here as members enroll from the Skills & Training page.</p>
+                  </div>
+                ) : (
+                  <DataTable
+                    headers={['👤 Member','📱 Phone','📍 Location','💼 Occupation','📅 Enrolled']}
+                    rows={(selectedEnrollments?.enrollments||[]).map((e:any) => [
+                      <div className="font-semibold text-gray-900">{e.full_name}</div>,
+                      <span className="text-sm font-mono text-gray-700">{e.phone}</span>,
+                      <span className="text-sm text-gray-600">{[e.village,e.district].filter(Boolean).join(', ')||'—'}</span>,
+                      <span className="text-sm text-gray-600">{e.occupation||'—'}</span>,
+                      <span className="text-sm text-gray-500 font-medium">{fdate(e.enrolled_at)}</span>,
+                    ])}
+                    emptyMsg="No members enrolled yet"
+                  />
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -634,29 +739,54 @@ export function CoordinatorPage() {
       </Modal>
 
       {/* Training Modal */}
-      <Modal open={trainingModal} onClose={()=>setTrainingModal(false)} title="Create Training Program">
+      <Modal open={trainingModal} onClose={()=>setTrainingModal(false)} title="🎓 Create New Training Program">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
+          <strong>✨ This program will be visible to all {d?.total_members||0} SHG members</strong><br/>Members can enroll and their details will appear here in real-time.
+        </div>
         <form onSubmit={tSubmit(d=>trainingMutation.mutate(d))} className="space-y-4">
-          <Field label="Program Title" required><input {...tReg('title',{required:true})} className="input" placeholder="e.g. Advanced Tailoring"/></Field>
-          <Field label="Description"><textarea {...tReg('description')} className="input" rows={2} placeholder="Program details…"/></Field>
-          <Field label="Provider"><input {...tReg('provider')} className="input" placeholder="e.g. NRLM Telangana"/></Field>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Duration (days)" required><input {...tReg('duration_days',{required:true})} type="number" min="1" className="input" placeholder="5"/></Field>
-            <Field label="Max Participants"><input {...tReg('max_participants')} type="number" min="1" className="input" placeholder="20"/></Field>
+          <Field label="🎯 Program Title" required><input {...tReg('title',{required:true})} className="input font-semibold" placeholder="e.g. Advanced Tailoring Course"/></Field>
+          <Field label="📝 Description (optional)"><textarea {...tReg('description')} className="input" rows={2} placeholder="What members will learn, topics covered, etc."/></Field>
+          
+          <div className="border-t pt-4 mt-4">
+            <p className="text-xs font-semibold text-gray-700 mb-3 uppercase">📋 Program Details</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="🏢 Provider/Trainer" required><input {...tReg('provider',{required:true})} className="input" placeholder="e.g. NRLM Telangana"/></Field>
+              <Field label="⏱️ Duration (days)" required><input {...tReg('duration_days',{required:true})} type="number" min="1" max="365" className="input" placeholder="e.g. 7"/></Field>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Mode"><select {...tReg('mode')} className="input"><option value="offline">Offline</option><option value="online">Online</option><option value="hybrid">Hybrid</option></select></Field>
-            <Field label="Start Date"><input {...tReg('start_date')} type="date" className="input"/></Field>
+
+          <div className="border-t pt-4">
+            <p className="text-xs font-semibold text-gray-700 mb-3 uppercase">📅 Schedule & Location</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="📅 Start Date"><input {...tReg('start_date')} type="date" className="input"/></Field>
+              <Field label="🏛️ Mode"><select {...tReg('mode')} className="input font-medium">
+                <option value="offline">🏪 Offline (In-person)</option>
+                <option value="online">💻 Online (Virtual)</option>
+                <option value="hybrid">🔄 Hybrid (Mixed)</option>
+              </select></Field>
+            </div>
+            <Field label="📍 Location (for offline trainings)"><input {...tReg('location')} className="input" placeholder="Venue address, Hall name, etc."/></Field>
           </div>
-          <Field label="Location (for offline)"><input {...tReg('location')} className="input" placeholder="Venue address"/></Field>
-          <button type="submit" disabled={trainingMutation.isPending} className="btn-primary w-full">
-            {trainingMutation.isPending?<><Loader2 size={15} className="animate-spin"/>Creating…</>:'Create & Notify Members'}
+
+          <div className="border-t pt-4">
+            <p className="text-xs font-semibold text-gray-700 mb-3 uppercase">👥 Capacity</p>
+            <Field label="👥 Max Participants" required><input {...tReg('max_participants',{required:true})} type="number" min="1" max="1000" className="input" placeholder="e.g. 20"/></Field>
+            <p className="text-xs text-gray-500 mt-2">💡 Tip: Set realistic capacity. Full programs become unavailable for enrollment.</p>
+          </div>
+
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+            <strong>⚠️ Before creating:</strong> Make sure all details are correct. All {d?.total_members||0} members will receive a notification.
+          </div>
+
+          <button type="submit" disabled={trainingMutation.isPending} className="btn-primary w-full gap-2 justify-center">
+            {trainingMutation.isPending?<><Loader2 size={16} className="animate-spin"/>Creating & Notifying Members...</>:<><Plus size={16}/>Create Program & Notify All Members</>}
           </button>
         </form>
       </Modal>
       {/* Loan Review Modal (Coordinator) */}
-      <Modal open={!!selectedLoan} onClose={()=>{setSelectedLoan(null);}} title={action==='approve'?'✅ Approve Loan':'❌ Reject Loan'}>
+      <Modal open={!!selectedLoan} onClose={()=>{setSelectedLoan(null);}} title={action==='forward'?'📤 Forward to Bank Officer':'❌ Reject Loan'}>
         {selectedLoan && (
-          <form onSubmit={handleSubmit(d=>reviewMutation.mutate({id:selectedLoan.id,action,...d}))} className="space-y-4">
+          <form onSubmit={handleSubmit(d=>reviewMutation.mutate({id:selectedLoan.id,action,...d}))} className="space-y-4 max-h-[70vh] overflow-y-auto">
             <div className="bg-gray-50 rounded-xl p-4">
               <div className="flex justify-between items-start">
                 <div><p className="font-semibold">{selectedLoan.applicant_name}</p><p className="text-xs text-gray-500 mt-0.5">{selectedLoan.applicant_phone}</p></div>
@@ -669,18 +799,50 @@ export function CoordinatorPage() {
                 <span className="text-xs text-gray-400">— {selectedLoan.ai_recommendation}</span>
               </div>
             </div>
-            {action==='approve' && (
-              <Field label="Interest Rate Override (optional)">
-                <input {...register('interest_rate')} type="number" step="0.1" className="input" placeholder={`${selectedLoan.interest_rate} (default)`}/>
-              </Field>
+            {selectedLoan.bank_passbook_path && (
+              <div className="border border-blue-200 bg-blue-50 rounded-xl p-3">
+                <h4 className="text-xs font-semibold text-gray-700 mb-2">📄 Bank Passbook</h4>
+                <a href={`/api/v1/loans/download/${selectedLoan.bank_passbook_path.split('/').pop()}?original=bank_passbook`} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                  <CheckCircle size={13}/> View Document
+                </a>
+              </div>
             )}
-            <Field label={action==='approve'?'Approval Remarks (optional)':'Rejection Reason *'}>
-              <textarea {...register('remarks',{required:action==='reject'})} className="input" rows={3} placeholder={action==='approve'?'Optional notes for the member…':'Reason for rejection (member will be notified)…'}/>
+            {selectedLoan.aadhaar_path && (
+              <div className="border border-purple-200 bg-purple-50 rounded-xl p-3">
+                <h4 className="text-xs font-semibold text-gray-700 mb-2">🆔 Aadhaar Card</h4>
+                <a href={`/api/v1/loans/download/${selectedLoan.aadhaar_path.split('/').pop()}?original=aadhaar`} target="_blank" rel="noopener noreferrer" className="text-xs text-purple-600 hover:underline flex items-center gap-1">
+                  <CheckCircle size={13}/> View Document
+                </a>
+              </div>
+            )}
+            {loanDetail?.applicant_profile && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                <h4 className="text-xs font-semibold text-gray-700 mb-2">👤 Applicant Profile</h4>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div><span className="text-gray-500">Village:</span> <span className="font-medium">{loanDetail.applicant_profile.village||'—'}</span></div>
+                  <div><span className="text-gray-500">District:</span> <span className="font-medium">{loanDetail.applicant_profile.district||'—'}</span></div>
+                  <div><span className="text-gray-500">Occupation:</span> <span className="font-medium">{loanDetail.applicant_profile.occupation||'—'}</span></div>
+                  <div><span className="text-gray-500">Income:</span> <span className="font-medium">{loanDetail.applicant_profile.annual_income?inr(loanDetail.applicant_profile.annual_income):'—'}</span></div>
+                </div>
+              </div>
+            )}
+            {loanDetail?.savings_summary && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                <h4 className="text-xs font-semibold text-gray-700 mb-2">💰 Savings & Credit</h4>
+                <div className="grid grid-cols-3 gap-2 text-xs text-center">
+                  <div><p className="font-bold text-green-700">{inr(loanDetail.savings_summary.balance)}</p><p className="text-gray-500">Balance</p></div>
+                  <div><p className="font-bold text-blue-700">{inr(loanDetail.savings_summary.total_deposits)}</p><p className="text-gray-500">Deposits</p></div>
+                  <div><p className="font-bold text-brand-700">{loanDetail.credit_assessment?.score?.toFixed(0)||'—'}/100</p><p className="text-gray-500">Credit</p></div>
+                </div>
+              </div>
+            )}
+            <Field label={action==='forward'?'Coordinator Remarks (optional)':'Rejection Reason *'}>
+              <textarea {...register('remarks',{required:action==='reject'})} className="input" rows={3} placeholder={action==='forward'?'Optional remarks for bank officer…':'Reason for rejection (member will be notified)…'}/>
             </Field>
-            <div className="flex gap-3">
+            <div className="flex gap-3 sticky bottom-0 bg-white pt-2">
               <button type="button" onClick={()=>{setSelectedLoan(null);}} className="btn-secondary flex-1">Cancel</button>
-              <button type="submit" disabled={reviewMutation.isPending} className={`flex-1 ${action==='approve'?'btn-primary':'btn-danger'}`}>
-                {reviewMutation.isPending?<Loader2 size={15} className="animate-spin"/>:action==='approve'?'✓ Approve Loan':'✗ Reject Loan'}
+              <button type="submit" disabled={reviewMutation.isPending} className={`flex-1 ${action==='forward'?'btn-primary':'btn-danger'}`}>
+                {reviewMutation.isPending?<Loader2 size={15} className="animate-spin"/>:action==='forward'?'📤 Forward to Bank':'✗ Reject Loan'}
               </button>
             </div>
           </form>
@@ -700,6 +862,7 @@ export function BankPage() {
   const { register, handleSubmit, reset } = useForm()
 
   const { data: d, isLoading } = useQuery({ queryKey:['dashboard','bank'], queryFn:()=>dashboardApi.bank().then(r=>r.data), staleTime:30000, refetchInterval:30000 })
+  const { data: loanDetail } = useQuery({ queryKey:['loan-detail',selectedLoan?.id], queryFn:()=>loansApi.get(selectedLoan.id).then(r=>r.data), enabled:!!selectedLoan?.id, staleTime:10000 })
 
   const reviewMutation = useMutation({
     mutationFn: ({id,action,remarks,interest_rate}:any) => loansApi.review(id,{action,remarks,interest_rate}),
@@ -734,7 +897,7 @@ export function BankPage() {
             const { grade, text, badge } = creditColor(score)
             const risk = score>=65?'Low':score>=50?'Medium':'High'
             const riskBadge = score>=65?'badge-green':score>=50?'badge-amber':'badge-red'
-            const pending = ['pending','coordinator_review','officer_review'].includes(l.status)
+            const pending = ['pending','officer_review'].includes(l.status)
             return [
               <span className="font-mono text-xs text-gray-500">{l.loan_number}</span>,
               <div><p className="font-semibold">{l.applicant_name}</p><p className="text-xs text-gray-400">{l.applicant_phone}</p></div>,
@@ -773,9 +936,53 @@ export function BankPage() {
                 <span className="text-xs text-gray-400">— {selectedLoan.ai_recommendation}</span>
               </div>
             </div>
+            {loanDetail?.applicant_profile && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                <h4 className="text-xs font-semibold text-gray-700 mb-2">👤 Applicant Profile</h4>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div><span className="text-gray-500">Village:</span> <span className="font-medium">{loanDetail.applicant_profile.village||'—'}</span></div>
+                  <div><span className="text-gray-500">District:</span> <span className="font-medium">{loanDetail.applicant_profile.district||'—'}</span></div>
+                  <div><span className="text-gray-500">Occupation:</span> <span className="font-medium">{loanDetail.applicant_profile.occupation||'—'}</span></div>
+                  <div><span className="text-gray-500">Income:</span> <span className="font-medium">{loanDetail.applicant_profile.annual_income?inr(loanDetail.applicant_profile.annual_income):'—'}</span></div>
+                  {loanDetail.applicant_profile.bank_name && <div className="col-span-2"><span className="text-gray-500">Bank:</span> <span className="font-medium">{loanDetail.applicant_profile.bank_name} — {loanDetail.applicant_profile.bank_account}</span></div>}
+                </div>
+              </div>
+            )}
+            {loanDetail?.savings_summary && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                <h4 className="text-xs font-semibold text-gray-700 mb-2">💰 Savings & Credit</h4>
+                <div className="grid grid-cols-3 gap-2 text-xs text-center">
+                  <div><p className="font-bold text-green-700">{inr(loanDetail.savings_summary.balance)}</p><p className="text-gray-500">Balance</p></div>
+                  <div><p className="font-bold text-blue-700">{inr(loanDetail.savings_summary.total_deposits)}</p><p className="text-gray-500">Deposits</p></div>
+                  <div><p className="font-bold text-brand-700">{loanDetail.credit_assessment?.score?.toFixed(0)||'—'}/100</p><p className="text-gray-500">Credit</p></div>
+                </div>
+              </div>
+            )}
+            {(selectedLoan.bank_passbook_path || selectedLoan.aadhaar_path) && (
+              <div className="grid grid-cols-2 gap-3">
+                {selectedLoan.bank_passbook_path && (
+                  <div className="border border-blue-200 bg-blue-50 rounded-xl p-3">
+                    <h4 className="text-xs font-semibold text-gray-700 mb-2">📄 Bank Passbook</h4>
+                    <a href={`/api/v1/loans/download/${selectedLoan.bank_passbook_path.split('/').pop()}?original=bank_passbook`} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline flex items-center gap-1"><CheckCircle size={13}/> View Document</a>
+                  </div>
+                )}
+                {selectedLoan.aadhaar_path && (
+                  <div className="border border-purple-200 bg-purple-50 rounded-xl p-3">
+                    <h4 className="text-xs font-semibold text-gray-700 mb-2">🆔 Aadhaar Card</h4>
+                    <a href={`/api/v1/loans/download/${selectedLoan.aadhaar_path.split('/').pop()}?original=aadhaar`} target="_blank" rel="noopener noreferrer" className="text-xs text-purple-600 hover:underline flex items-center gap-1"><CheckCircle size={13}/> View Document</a>
+                  </div>
+                )}
+              </div>
+            )}
+            {selectedLoan.coordinator_remarks && (
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                <h4 className="text-xs font-semibold text-gray-700 mb-1">📝 Coordinator Remarks</h4>
+                <p className="text-xs text-gray-600">{selectedLoan.coordinator_remarks}</p>
+              </div>
+            )}
             {action==='approve' && (
               <Field label="Interest Rate Override (optional)">
-                <input {...register('interest_rate')} type="number" step="0.1" className="input" placeholder={`${selectedLoan.interest_rate} (default)`}/>
+                <input {...register('interest_rate')} type="number" step="0.1" className="input" placeholder={`${selectedLoan.interest_rate||7.0} (default)`}/>
               </Field>
             )}
             <Field label={action==='approve'?'Approval Remarks (optional)':'Rejection Reason *'}>
@@ -812,6 +1019,24 @@ export function AdminPage() {
     onSuccess: () => { toast.success('User status updated!'); qc.invalidateQueries({queryKey:['dashboard','admin']}) },
     onError: (e:any) => toast.error(e.response?.data?.detail||'Failed'),
   })
+  
+  const [addSchemeModal, setAddSchemeModal] = useState(false)
+  const { register, handleSubmit, reset } = useForm()
+  const { data: schemes } = useQuery({ queryKey:['admin-schemes'], queryFn:()=>schemesApi.list({limit:100}).then(r=>r.data), enabled: tab==='schemes' })
+  const createSchemeMutation = useMutation({
+    mutationFn: (data:any) => schemesApi.create({...data, eligibility_criteria:{}, required_documents:data.required_documents?data.required_documents.split(',').map((s:string)=>s.trim()):[]}),
+    onSuccess: () => { toast.success('Scheme added!'); setAddSchemeModal(false); reset(); qc.invalidateQueries({queryKey:['admin-schemes']}) },
+    onError: (e:any) => toast.error(e.response?.data?.detail||'Failed'),
+  })
+  const deleteSchemeMutation = useMutation({
+    mutationFn: (id:number) => schemesApi.delete(id),
+    onSuccess: () => { toast.success('Scheme deactivated!'); qc.invalidateQueries({queryKey:['admin-schemes']}) }
+  })
+  const autoFetchMutation = useMutation({
+    mutationFn: () => schemesApi.autoFetch(),
+    onSuccess: (r:any) => { toast.success(`Auto-fetched ${r.data.count} schemes via AI!`); qc.invalidateQueries({queryKey:['admin-schemes']}) },
+    onError: (e:any) => toast.error(e.response?.data?.detail||'Failed to auto-fetch schemes')
+  })
 
   const ML_MODELS = [
     { name:'Credit Risk (Rule-based XGBoost)', accuracy:91, status:'active' },
@@ -823,7 +1048,7 @@ export function AdminPage() {
 
   return (
     <AppShell title="Admin Dashboard" subtitle="Platform-wide management, monitoring and control">
-      <Tabs tabs={[{id:'overview',label:'Overview'},{id:'users',label:`Users (${d?.total_users||0})`},{id:'loans',label:'All Loans'},{id:'marketplace',label:'Marketplace'},{id:'ai',label:'AI Keys'},{id:'security',label:'Audit Logs'}]} active={tab} onChange={setTab}/>
+      <Tabs tabs={[{id:'overview',label:'Overview'},{id:'users',label:`Users (${d?.total_users||0})`},{id:'loans',label:'All Loans'},{id:'schemes',label:'Schemes'},{id:'marketplace',label:'Marketplace'},{id:'ai',label:'AI Keys'},{id:'security',label:'Audit Logs'}]} active={tab} onChange={setTab}/>
 
       {tab==='overview' && (
         <>
@@ -914,6 +1139,31 @@ export function AdminPage() {
         </div>
       )}
 
+      {tab==='schemes' && (
+        <div className="card">
+          <div className="flex justify-between items-center p-5 border-b border-gray-100">
+            <h3 className="section-title mb-0">Government Schemes</h3>
+            <div className="flex gap-2">
+              <button disabled={autoFetchMutation.isPending} onClick={()=>autoFetchMutation.mutate()} className="btn-secondary btn-sm gap-1 bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100">
+                {autoFetchMutation.isPending ? <Loader2 size={13} className="animate-spin"/> : '✨'} AI Auto-Discover
+              </button>
+              <button onClick={()=>setAddSchemeModal(true)} className="btn-primary btn-sm gap-1"><Plus size={14}/> Add Scheme</button>
+            </div>
+          </div>
+          <DataTable
+            headers={['ID', 'Name', 'Category', 'Max Benefit', 'Status', 'Actions']}
+            rows={(schemes?.items||[]).map((s:any) => [
+              <span className="text-xs text-gray-500 font-mono">#{s.id}</span>,
+              <div className="max-w-[200px] truncate"><span className="font-semibold text-sm">{s.name}</span><p className="text-xs text-gray-400 truncate">{s.ministry}</p></div>,
+              <span className="badge badge-purple">{s.category}</span>,
+              <span className="font-bold text-green-700">{s.max_benefit_amount ? inr(s.max_benefit_amount) : 'Varies'}</span>,
+              <span className={`badge ${s.is_active?'badge-green':'badge-red'}`}>{s.is_active?'Active':'Inactive'}</span>,
+              <button disabled={!s.is_active} onClick={()=>deleteSchemeMutation.mutate(s.id)} className="text-red-500 hover:text-red-700 text-xs font-semibold px-2">Deactivate</button>
+            ])}
+          />
+        </div>
+      )}
+
       {tab==='security' && (
         <div className="card">
           <DataTable loading={isLoading}
@@ -928,6 +1178,38 @@ export function AdminPage() {
           />
         </div>
       )}
+
+      <Modal open={addSchemeModal} onClose={()=>setAddSchemeModal(false)} title="➕ Add Government Scheme">
+        <form onSubmit={handleSubmit(d=>createSchemeMutation.mutate(d))} className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+          <Field label="Scheme Name *"><input {...register('name',{required:true})} className="input" placeholder="e.g. PM Kisan Samman Nidhi"/></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Category *">
+              <select {...register('category',{required:true})} className="input">
+                <option value="Finance">Finance</option>
+                <option value="Agriculture">Agriculture</option>
+                <option value="Housing">Housing</option>
+                <option value="Livelihood">Livelihood</option>
+                <option value="Health">Health</option>
+                <option value="Employment">Employment</option>
+                <option value="Business">Business</option>
+              </select>
+            </Field>
+            <Field label="Ministry"><input {...register('ministry')} className="input" placeholder="e.g. Ministry of Agriculture"/></Field>
+          </div>
+          <Field label="Description *"><textarea {...register('description',{required:true})} className="input" rows={2}/></Field>
+          <Field label="Benefits *"><textarea {...register('benefits',{required:true})} className="input" rows={2}/></Field>
+          <Field label="Required Documents (comma separated)"><input {...register('required_documents')} className="input" placeholder="e.g. Aadhaar, PAN, Bank Passbook"/></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Max Benefit Amount (INR)"><input type="number" {...register('max_benefit_amount')} className="input" placeholder="e.g. 6000"/></Field>
+            <Field label="Official URL (optional)"><input type="url" {...register('application_url')} className="input" placeholder="https://..."/></Field>
+          </div>
+          <div className="pt-2 sticky bottom-0 bg-white">
+            <button type="submit" disabled={createSchemeMutation.isPending} className="btn-primary w-full">
+              {createSchemeMutation.isPending ? <><Loader2 size={15} className="animate-spin"/> Saving...</> : 'Save Scheme'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </AppShell>
   )
 }

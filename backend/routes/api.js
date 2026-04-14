@@ -37,15 +37,34 @@ router.get('/dashboard/coordinator',...requireCoordinator,(req,res)=>{ try{ cons
 			total_savings: Math.max(dep-wit,0),
 			pending_loans: db.prepare("SELECT COUNT(*) as c FROM loans WHERE status IN ('pending','coordinator_review')").get().c,
 			members: db.prepare("SELECT u.*,mp.village,mp.district,mp.credit_score,mp.attendance_pct,mp.occupation,mp.shg_id FROM users u LEFT JOIN member_profiles mp ON u.id=mp.user_id WHERE u.role='member' AND u.is_active=1 ORDER BY u.full_name").all().map(safe),
-			pending_loan_list: db.prepare("SELECT l.*,u.full_name as applicant_name,u.phone as applicant_phone,mp.village FROM loans l JOIN users u ON l.applicant_id=u.id LEFT JOIN member_profiles mp ON u.id=mp.user_id WHERE l.status IN ('pending','coordinator_review') ORDER BY l.created_at DESC").all(),
+			loans: db.prepare("SELECT l.*,u.full_name as applicant_name,u.phone as applicant_phone,mp.village,mp.district,mp.credit_score,mp.occupation,mp.annual_income FROM loans l JOIN users u ON l.applicant_id=u.id LEFT JOIN member_profiles mp ON u.id=mp.user_id ORDER BY l.created_at DESC").all(),
 			shgs: db.prepare('SELECT * FROM shg_groups WHERE is_active=1').all(),
-			training_programs: db.prepare('SELECT * FROM training_programs WHERE is_active=1 ORDER BY start_date ASC').all(),
+			training_programs: db.prepare('SELECT tp.*, COUNT(te.id) as enrolled_count FROM training_programs tp LEFT JOIN training_enrollments te ON tp.id=te.program_id WHERE tp.is_active=1 GROUP BY tp.id ORDER BY tp.start_date ASC').all(),
 			recent_savings: db.prepare("SELECT s.*,u.full_name FROM savings s JOIN users u ON s.member_id=u.id ORDER BY s.id DESC LIMIT 15").all(),
 			member_savings,
 			group_loan_performance
 		}); }catch(e){res.status(500).json({detail:e.message});} });
 
-router.get('/dashboard/bank',...requireBankOfficer,(req,res)=>{ try{ const db=getDb(); const tdp=db.prepare('SELECT COUNT(*) as c FROM repayments WHERE due_date <= date("now")').get().c; const tpd=db.prepare('SELECT COUNT(*) as c FROM repayments WHERE is_paid=1 AND due_date <= date("now")').get().c; res.json({pending_approvals:db.prepare("SELECT COUNT(*) as c FROM loans WHERE status IN ('pending','coordinator_review','officer_review')").get().c,approved_this_month:db.prepare("SELECT COUNT(*) as c FROM loans WHERE status='approved' AND updated_at >= date('now','-30 days')").get().c,total_disbursed:db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM loans WHERE status IN ('approved','disbursed')").get().t,repayment_rate:tdp>0?Math.round(tpd/tdp*100):100,high_risk_count:db.prepare('SELECT COUNT(*) as c FROM loans WHERE ai_credit_score < 50 AND status NOT IN ("closed","rejected")').get().c,all_loans:db.prepare("SELECT l.*,u.full_name as applicant_name,u.phone as applicant_phone,mp.village,mp.district FROM loans l JOIN users u ON l.applicant_id=u.id LEFT JOIN member_profiles mp ON u.id=mp.user_id ORDER BY l.created_at DESC LIMIT 100").all()}); }catch(e){res.status(500).json({detail:e.message});} });
+router.get('/dashboard/bank', ...requireBankOfficer, (req, res) => {
+  try {
+    const db = getDb();
+    
+    const tdp = db.prepare("SELECT COUNT(*) as c FROM repayments WHERE due_date <= date('now')").get().c;
+    const tpd = db.prepare("SELECT COUNT(*) as c FROM repayments WHERE is_paid=1 AND due_date <= date('now')").get().c;
+    
+    res.json({
+      pending_approvals: db.prepare("SELECT COUNT(*) as c FROM loans WHERE status IN ('pending','coordinator_review','officer_review')").get().c,
+      approved_count: db.prepare("SELECT COUNT(*) as c FROM loans WHERE status='approved' AND updated_at >= date('now','-30 days')").get().c,
+      total_disbursed: db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM loans WHERE status IN ('approved','disbursed')").get().t,
+      repayment_rate: tdp > 0 ? Math.round((tpd / tdp) * 100) : 100,
+      high_risk: db.prepare("SELECT COUNT(*) as c FROM loans WHERE ai_credit_score < 50 AND status NOT IN ('closed','rejected')").get().c,
+      loans: db.prepare("SELECT l.*, u.full_name as applicant_name, u.phone as applicant_phone, mp.village, mp.district FROM loans l JOIN users u ON l.applicant_id=u.id LEFT JOIN member_profiles mp ON u.id=mp.user_id ORDER BY l.created_at DESC LIMIT 100").all()
+    });
+  } catch (e) {
+    console.error("Dashboard Bank Error:", e);
+    res.status(500).json({ detail: e.message });
+  }
+});
 router.get('/dashboard/admin',...requireAdmin,(req,res)=>{ try{ const db=getDb(); res.json({total_users:db.prepare('SELECT COUNT(*) as c FROM users').get().c,total_shgs:db.prepare('SELECT COUNT(*) as c FROM shg_groups').get().c,total_loans_disbursed:db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM loans WHERE status IN ('approved','disbursed')").get().t,marketplace_gmv:db.prepare('SELECT COALESCE(SUM(total_amount),0) as t FROM orders').get().t,active_schemes:db.prepare('SELECT COUNT(*) as c FROM government_schemes WHERE is_active=1').get().c,users_by_role:db.prepare("SELECT role,COUNT(*) as count FROM users GROUP BY role").all(),all_users:db.prepare("SELECT u.*,mp.village,mp.district,mp.credit_score FROM users u LEFT JOIN member_profiles mp ON u.id=mp.user_id ORDER BY u.created_at DESC LIMIT 200").all().map(safe),audit_logs:db.prepare("SELECT al.*,u.full_name FROM audit_logs al LEFT JOIN users u ON al.user_id=u.id ORDER BY al.created_at DESC LIMIT 50").all(),recent_loans:db.prepare("SELECT l.*,u.full_name as name FROM loans l JOIN users u ON l.applicant_id=u.id ORDER BY l.created_at DESC LIMIT 20").all(),ml_models:[{name:'Credit Risk',accuracy:91,status:'active'},{name:'Livelihood Recommender',accuracy:87,status:'active'},{name:'Scheme Matching',accuracy:94,status:'active'},{name:'Health Classifier',accuracy:89,status:'active'}]}); }catch(e){res.status(500).json({detail:e.message});} });
 // USERS
 router.get('/users',...requireAdmin,(req,res)=>{ const db=getDb(),{page=1,limit=20,role,search}=req.query; let q="SELECT u.*,mp.village,mp.district,mp.credit_score FROM users u LEFT JOIN member_profiles mp ON u.id=mp.user_id WHERE 1=1",params=[]; if(role){q+=' AND u.role=?';params.push(role);} if(search){q+=' AND (u.full_name LIKE ? OR u.phone LIKE ?)';params.push(`%${search}%`,`%${search}%`);} const total=db.prepare(q.replace('SELECT u.*,mp.village,mp.district,mp.credit_score','SELECT COUNT(*) as c')).get(...params).c; q+=` ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${(page-1)*limit}`; res.json({users:db.prepare(q).all(...params).map(safe),total,page:Number(page),pages:Math.ceil(total/limit)}); });
@@ -62,21 +81,25 @@ router.post('/savings/self',authenticate,(req,res)=>{ try{ const { amount, trans
 // CREDIT
 router.get('/credit-score',authenticate,(req,res)=>{ const uid=req.query.member_id&&['coordinator','bank_officer','admin'].includes(req.user.role)?Number(req.query.member_id):req.user.id; res.json(getCreditScore(uid)); });
 // LOANS
-router.post('/loans/apply',...requireMember,async (req, res) => {
+router.post('/loans/apply',...requireMember,upload.fields([{name:'bank_passbook',maxCount:1},{name:'aadhaar',maxCount:1}]),async (req, res) => {
 	try {
 		const { amount, purpose, duration_months = 12, collateral = 'None' } = req.body;
 		if (!amount || amount < 1000) return res.status(400).json({ detail: 'Minimum loan amount is ₹1,000' });
 		if (!purpose || purpose.trim().length < 10) return res.status(400).json({ detail: 'Describe purpose in at least 10 characters' });
+		if (!req.files?.bank_passbook?.[0]) return res.status(400).json({ detail: 'Bank passbook document required' });
+		if (!req.files?.aadhaar?.[0]) return res.status(400).json({ detail: 'Aadhaar document required' });
 
 		const db = getDb(), cs = getCreditScore(req.user.id);
 		const lnum = `GS-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-		const lid = db.prepare('INSERT INTO loans (loan_number,applicant_id,amount,purpose,duration_months,collateral,status,ai_credit_score,ai_recommendation) VALUES (?,?,?,?,?,?,?,?,?)').run(lnum, req.user.id, amount, purpose.trim(), duration_months, collateral, 'pending', cs.score, cs.recommendation).lastInsertRowid;
+		const pbPath = `uploads/${req.files.bank_passbook[0].filename}`;
+		const adhPath = `uploads/${req.files.aadhaar[0].filename}`;
+		const lid = db.prepare('INSERT INTO loans (loan_number,applicant_id,amount,purpose,duration_months,collateral,bank_passbook_path,aadhaar_path,status,ai_credit_score,ai_recommendation) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(lnum, req.user.id, amount, purpose.trim(), duration_months, collateral, pbPath, adhPath, 'pending', cs.score, cs.recommendation).lastInsertRowid;
 
 		const sched = genEMI(amount, 7.0, duration_months);
 		const rs = db.prepare('INSERT INTO repayments (loan_id,month_number,due_date,emi_amount,principal,interest_amount) VALUES (?,?,?,?,?,?)');
 		for (const s of sched) rs.run(lid, s.month, s.due_date, s.emi, s.principal, s.interest);
 
-		notify(db, req.user.id, '📋 Loan Application Submitted', `Loan #${lnum} for ₹${Number(amount).toLocaleString('en-IN')} submitted. Credit Score: ${cs.score}/100 (${cs.grade}).`, 'loan', lid, 'loan');
+		notify(db, req.user.id, '📋 Loan Application Submitted', `Loan #${lnum} for ₹${Number(amount).toLocaleString('en-IN')} submitted. Credit Score: ${cs.score}/100 (${cs.grade}). Documents uploaded.`, 'loan', lid, 'loan');
 
 		// Notify coordinators, bank officers, and admins about new loan application
 		db.prepare("SELECT id FROM users WHERE role IN ('coordinator','bank_officer','admin')").all().forEach(c =>
@@ -91,11 +114,14 @@ router.post('/loans/apply',...requireMember,async (req, res) => {
 });
 router.get('/loans/my',...requireMember,(req,res)=>res.json(getDb().prepare('SELECT * FROM loans WHERE applicant_id=? ORDER BY created_at DESC').all(req.user.id)));
 router.get('/loans',...requireCoordinator,(req,res)=>{ const {status}=req.query; let q="SELECT l.*,u.full_name as applicant_name,u.phone as applicant_phone,mp.village FROM loans l JOIN users u ON l.applicant_id=u.id LEFT JOIN member_profiles mp ON u.id=mp.user_id",p=[]; if(status){q+=' WHERE l.status=?';p.push(status);} res.json(getDb().prepare(q+' ORDER BY l.created_at DESC').all(...p)); });
-router.get('/loans/:id',authenticate,(req,res)=>{ const db=getDb(),loan=db.prepare("SELECT l.*,u.full_name as applicant_name,u.phone FROM loans l JOIN users u ON l.applicant_id=u.id WHERE l.id=?").get(req.params.id); if(!loan)return res.status(404).json({detail:'Loan not found'}); if(loan.applicant_id!==req.user.id&&!['coordinator','bank_officer','admin'].includes(req.user.role))return res.status(403).json({detail:'Access denied'}); res.json({...loan,repayments:db.prepare('SELECT * FROM repayments WHERE loan_id=? ORDER BY month_number').all(loan.id)}); });
+router.get('/loans/:id',authenticate,(req,res)=>{ try{ const db=getDb(),loan=db.prepare("SELECT l.*,u.full_name as applicant_name,u.phone as applicant_phone FROM loans l JOIN users u ON l.applicant_id=u.id WHERE l.id=?").get(req.params.id); if(!loan)return res.status(404).json({detail:'Loan not found'}); if(loan.applicant_id!==req.user.id&&!['coordinator','bank_officer','admin'].includes(req.user.role))return res.status(403).json({detail:'Access denied'}); const profile=db.prepare('SELECT * FROM member_profiles WHERE user_id=?').get(loan.applicant_id)||null; const dep=db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM savings WHERE member_id=? AND transaction_type='deposit'").get(loan.applicant_id).t; const wit=db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM savings WHERE member_id=? AND transaction_type='withdrawal'").get(loan.applicant_id).t; let cs=null; try{cs=getCreditScore(loan.applicant_id);}catch(e){} const pastLoans=db.prepare("SELECT id,loan_number,amount,status,created_at FROM loans WHERE applicant_id=? AND id!=? ORDER BY created_at DESC LIMIT 5").all(loan.applicant_id,loan.id); res.json({...loan,repayments:db.prepare('SELECT * FROM repayments WHERE loan_id=? ORDER BY month_number').all(loan.id),applicant_profile:profile,savings_summary:{total_deposits:dep,total_withdrawals:wit,balance:Math.max(dep-wit,0)},credit_assessment:cs,past_loans:pastLoans}); }catch(e){res.status(500).json({detail:e.message});} });
 router.post('/loans/:id/review',...requireCoordinator,(req,res)=>{ try{ const {action,remarks='',interest_rate}=req.body; if(!['approve','reject','forward'].includes(action))return res.status(400).json({detail:'action must be: approve, reject, or forward'}); const db=getDb(),loan=db.prepare('SELECT * FROM loans WHERE id=?').get(req.params.id); if(!loan)return res.status(404).json({detail:'Loan not found'}); let ns,oid=null,cid=null,or=null,cr=null,rr=null,dd=null; if(action==='approve'){ns='approved';oid=req.user.id;or=remarks;dd=new Date().toISOString().slice(0,10);if(interest_rate)db.prepare('UPDATE loans SET interest_rate=? WHERE id=?').run(parseFloat(interest_rate),loan.id);}else if(action==='reject'){ns='rejected';rr=remarks||'Rejected by reviewing officer';oid=req.user.id;}else{ns=req.user.role==='coordinator'?'officer_review':'coordinator_review';if(req.user.role==='coordinator')cid=req.user.id;else oid=req.user.id;cr=remarks;} db.prepare("UPDATE loans SET status=?,officer_id=COALESCE(?,officer_id),coordinator_id=COALESCE(?,coordinator_id),officer_remarks=COALESCE(?,officer_remarks),coordinator_remarks=COALESCE(?,coordinator_remarks),rejection_reason=COALESCE(?,rejection_reason),disbursement_date=COALESCE(?,disbursement_date),updated_at=datetime('now') WHERE id=?").run(ns,oid,cid,or,cr,rr,dd,loan.id); const msgs={approve:`✅ LOAN APPROVED! Your loan #${loan.loan_number} for ₹${loan.amount.toLocaleString('en-IN')} has been approved! Funds will be disbursed soon.`,reject:`❌ Loan #${loan.loan_number} was not approved. Reason: ${remarks||'Does not meet criteria.'}`,forward:`📤 Loan #${loan.loan_number} forwarded for ${req.user.role==='coordinator'?'bank officer':'coordinator'} review.`}; notify(db,loan.applicant_id,action==='approve'?'✅ Loan Approved!':action==='reject'?'❌ Loan Rejected':'📤 Loan Forwarded',msgs[action],'loan',loan.id,'loan'); if(action==='forward'&&req.user.role==='coordinator')db.prepare("SELECT id FROM users WHERE role IN ('bank_officer','admin')").all().forEach(o=>notify(db,o.id,'🏦 Loan Awaiting Approval',`${req.user.full_name} forwarded ₹${loan.amount.toLocaleString('en-IN')} loan. Credit: ${loan.ai_credit_score}/100.`,'loan',loan.id,'loan')); audit(db,req.user.id,`loan_${action}`,'loan',loan.id,remarks); res.json({message:`Loan ${action}d`,status:ns,loan_id:loan.id}); }catch(e){res.status(500).json({detail:e.message});} });
 router.post('/loans/:id/pay-emi',...requireCoordinator,(req,res)=>{ try{ const {month_number}=req.body; const db=getDb(),rep=db.prepare('SELECT * FROM repayments WHERE loan_id=? AND month_number=?').get(req.params.id,month_number); if(!rep)return res.status(404).json({detail:'EMI not found'}); if(rep.is_paid)return res.status(400).json({detail:'Already paid'}); const rc=`EMI-${Date.now()}-${Math.random().toString(36).slice(2,4).toUpperCase()}`; db.prepare("UPDATE repayments SET is_paid=1,paid_date=date('now'),receipt_number=? WHERE id=?").run(rc,rep.id); db.prepare("UPDATE member_profiles SET credit_score=MIN(100,credit_score+0.5) WHERE user_id=(SELECT applicant_id FROM loans WHERE id=?)").run(req.params.id); const loan=db.prepare('SELECT * FROM loans WHERE id=?').get(req.params.id); notify(db,loan.applicant_id,'✅ EMI Recorded',`EMI #${month_number} (₹${rep.emi_amount}) for loan #${loan.loan_number} recorded. Receipt: ${rc}`,'loan',loan.id,'loan'); res.json({success:true,receipt_number:rc}); }catch(e){res.status(500).json({detail:e.message});} });
 // Backwards-compatible route name: /loans/:id/repayment
 router.post('/loans/:id/repayment',...requireCoordinator,(req,res)=>{ try{ const {month_number}=req.body; const db=getDb(),rep=db.prepare('SELECT * FROM repayments WHERE loan_id=? AND month_number=?').get(req.params.id,month_number); if(!rep)return res.status(404).json({detail:'EMI not found'}); if(rep.is_paid)return res.status(400).json({detail:'Already paid'}); const rc=`EMI-${Date.now()}-${Math.random().toString(36).slice(2,4).toUpperCase()}`; db.prepare("UPDATE repayments SET is_paid=1,paid_date=date('now'),receipt_number=? WHERE id=?").run(rc,rep.id); db.prepare("UPDATE member_profiles SET credit_score=MIN(100,credit_score+0.5) WHERE user_id=(SELECT applicant_id FROM loans WHERE id=?)").run(req.params.id); const loan=db.prepare('SELECT * FROM loans WHERE id=?').get(req.params.id); notify(db,loan.applicant_id,'✅ EMI Recorded',`EMI #${month_number} (₹${rep.emi_amount}) for loan #${loan.loan_number} recorded. Receipt: ${rc}`,'loan',loan.id,'loan'); res.json({success:true,receipt_number:rc}); }catch(e){res.status(500).json({detail:e.message});} });
+// LOAN DOCUMENTS
+router.get('/loans/:id/documents',authenticate,(req,res)=>{ try{ const db=getDb(),loan=db.prepare('SELECT * FROM loans WHERE id=?').get(req.params.id); if(!loan)return res.status(404).json({detail:'Loan not found'}); if(loan.applicant_id!==req.user.id&&!['coordinator','bank_officer','admin'].includes(req.user.role))return res.status(403).json({detail:'Access denied'}); const docs=[]; if(loan.bank_passbook_path)docs.push({document_type:'bank_passbook',file_path:loan.bank_passbook_path,upload_date:loan.created_at}); if(loan.aadhaar_path)docs.push({document_type:'aadhaar',file_path:loan.aadhaar_path,upload_date:loan.created_at}); res.json({loan_id:req.params.id,loan_number:loan.loan_number,documents:docs}); }catch(e){res.status(500).json({detail:e.message});} });
+router.get('/loans/download/:filename',authenticate,(req,res)=>{ try{ const filePath=path.join(UPLOAD_DIR,req.params.filename); if(!filePath.startsWith(UPLOAD_DIR))return res.status(403).json({detail:'Access denied'}); if(!fs.existsSync(filePath))return res.status(404).json({detail:'File not found'}); const orig=decodeURIComponent(req.query.original||req.params.filename); return res.download(filePath,orig); }catch(e){res.status(500).json({detail:e.message});} });
 // SKILLS
 router.get('/skills',(req,res)=>res.json(getDb().prepare('SELECT * FROM skills ORDER BY category,name').all()));
 router.get('/skills/my',authenticate,(req,res)=>{ const uid=req.query.member_id&&['coordinator','admin'].includes(req.user.role)?Number(req.query.member_id):req.user.id; res.json(getDb().prepare('SELECT ms.*,s.name,s.category,s.description FROM member_skills ms JOIN skills s ON ms.skill_id=s.id WHERE ms.member_id=? ORDER BY ms.added_at DESC').all(uid)); });
@@ -103,15 +129,61 @@ router.post('/skills/my',authenticate,(req,res)=>{ try{ const {skill_id,proficie
 router.put('/skills/my/:id',authenticate,(req,res)=>{ getDb().prepare('UPDATE member_skills SET proficiency=COALESCE(?,proficiency),years_experience=COALESCE(?,years_experience) WHERE id=? AND member_id=?').run(req.body.proficiency||null,req.body.years_experience||null,req.params.id,req.user.id); res.json({success:true}); });
 router.delete('/skills/my/:id',authenticate,(req,res)=>{ getDb().prepare('DELETE FROM member_skills WHERE id=? AND member_id=?').run(req.params.id,req.user.id); res.json({success:true}); });
 // TRAINING
-router.get('/training',(req,res)=>res.json(getDb().prepare('SELECT * FROM training_programs WHERE is_active=1 ORDER BY start_date ASC').all()));
-router.post('/training',...requireCoordinator,(req,res)=>{ try{ const {title,description='',provider='',mode='offline',duration_days,start_date,location='',max_participants=20}=req.body; if(!title||!duration_days)return res.status(400).json({detail:'title and duration_days required'}); const db=getDb(); const id=db.prepare('INSERT INTO training_programs (title,description,provider,mode,duration_days,start_date,location,max_participants) VALUES (?,?,?,?,?,?,?,?)').run(title,description,provider,mode,duration_days,start_date||null,location,max_participants).lastInsertRowid; res.status(201).json(db.prepare('SELECT * FROM training_programs WHERE id=?').get(id)); }catch(e){res.status(500).json({detail:e.message});} });
-router.post('/training/:id/enroll',authenticate,(req,res)=>{ try{ const db=getDb(),prog=db.prepare('SELECT * FROM training_programs WHERE id=? AND is_active=1').get(req.params.id); if(!prog)return res.status(404).json({detail:'Program not found'}); if(prog.enrolled_count>=prog.max_participants)return res.status(400).json({detail:'Program is full'}); db.prepare('INSERT INTO training_enrollments (program_id,member_id) VALUES (?,?)').run(req.params.id,req.user.id); db.prepare('UPDATE training_programs SET enrolled_count=enrolled_count+1 WHERE id=?').run(req.params.id); notify(db,req.user.id,'🎓 Enrolled!',`You are enrolled in "${prog.title}" starting ${prog.start_date||'soon'}. ${prog.location?'Location: '+prog.location:'Mode: '+prog.mode}`,'training',prog.id,'training'); res.json({success:true,message:`Enrolled in ${prog.title}`}); }catch(e){if(e.message.includes('UNIQUE'))return res.status(409).json({detail:'Already enrolled'});res.status(500).json({detail:e.message});} });
-router.get('/training/my-enrollments',authenticate,(req,res)=>res.json(getDb().prepare('SELECT te.*,tp.title,tp.provider,tp.mode,tp.start_date,tp.location,tp.duration_days FROM training_enrollments te JOIN training_programs tp ON te.program_id=tp.id WHERE te.member_id=? ORDER BY te.enrolled_at DESC').all(req.user.id)));
+router.get('/training',(req,res)=>{ try{ const db=getDb(); const progs=db.prepare('SELECT * FROM training_programs WHERE is_active=1 ORDER BY start_date ASC').all(); const uid=req.user?.id; const results=progs.map(p=>({ ...p, is_enrolled: uid ? db.prepare('SELECT id FROM training_enrollments WHERE program_id=? AND member_id=?').get(p.id, uid) ? true : false : false, seats_left: Math.max(0, p.max_participants - p.enrolled_count) })); res.json(results); }catch(e){res.status(500).json({detail:e.message});} });
+router.get('/training/my-enrollments',authenticate,(req,res)=>{ try{ res.json(getDb().prepare('SELECT te.*,tp.title,tp.provider,tp.mode,tp.start_date,tp.location,tp.duration_days,tp.description FROM training_enrollments te JOIN training_programs tp ON te.program_id=tp.id WHERE te.member_id=? ORDER BY te.enrolled_at DESC').all(req.user.id)); }catch(e){res.status(500).json({detail:e.message});} });
+router.get('/training/:id',(req,res)=>{ try{ const db=getDb(),prog=db.prepare('SELECT * FROM training_programs WHERE id=? AND is_active=1').get(req.params.id); if(!prog)return res.status(404).json({detail:'Program not found'}); const uid=req.user?.id; res.json({...prog, is_enrolled: uid ? db.prepare('SELECT id FROM training_enrollments WHERE program_id=? AND member_id=?').get(prog.id, uid) ? true : false : false, seats_left: Math.max(0, prog.max_participants - prog.enrolled_count), enrolled_members: db.prepare('SELECT u.id, u.full_name, u.phone FROM training_enrollments te JOIN users u ON te.member_id=u.id WHERE te.program_id=?').all(prog.id)}); }catch(e){res.status(500).json({detail:e.message});} });
+router.post('/training',...requireCoordinator,(req,res)=>{ 
+	try{ 
+		const {title,description='',provider='',mode='offline',duration_days,start_date,location='',max_participants=20}=req.body; 
+		if(!title||!title.trim())return res.status(400).json({detail:'Program title is required'}); 
+		if(!duration_days||duration_days<1)return res.status(400).json({detail:'Duration must be at least 1 day'}); 
+		if(!provider||!provider.trim())return res.status(400).json({detail:'Provider/Trainer name is required'}); 
+		if(max_participants<1||max_participants>1000)return res.status(400).json({detail:'Max participants must be between 1 and 1000'}); 
+		const db=getDb(); 
+		const prog_data = { title: title.trim(), description: description.trim(), provider: provider.trim(), mode: ['offline','online','hybrid'].includes(mode) ? mode : 'offline', duration_days: parseInt(duration_days), start_date: start_date || null, location: location.trim(), max_participants: parseInt(max_participants), enrolled_count: 0, is_active: 1 }; 
+		const result = db.prepare('INSERT INTO training_programs (title,description,provider,mode,duration_days,start_date,location,max_participants,enrolled_count,is_active) VALUES (?,?,?,?,?,?,?,?,?,?)').run( prog_data.title, prog_data.description, prog_data.provider, prog_data.mode, prog_data.duration_days, prog_data.start_date, prog_data.location, prog_data.max_participants, prog_data.enrolled_count, prog_data.is_active ); 
+		const id = result.lastInsertRowid; 
+		const prog = db.prepare('SELECT * FROM training_programs WHERE id=?').get(id); 
+		audit(db, req.user.id, 'training_create', 'training_program', id, title); 
+		// Notify all active members 
+		db.prepare("SELECT id FROM users WHERE role='member' AND is_active=1").all().forEach(m=>{ 
+			const notif_msg = `🎓 New Training Program!\n\n"${title}"\n\n⏱️ Duration: ${duration_days} days\n🏛️ Mode: ${mode}\n👥 Seats: ${max_participants}\n${ start_date ? '📅 Starts: ' + start_date : '⏳ Flexible timing' }\n${location ? '📍 Location: ' + location : ''}\n\n👉 Enroll now from Skills & Training section!`; 
+			notify(db, m.id, '🎓 New Training Program', notif_msg, 'training', id, 'training'); 
+		}); 
+		const response = { ...prog, seats_left: Math.max(0, prog.max_participants - prog.enrolled_count), enrollment_percentage: 0 }; 
+		res.status(201).json(response); 
+	}catch(e){
+		console.error(e);
+		res.status(500).json({detail:'Failed to create program: '+e.message});
+	} 
+});
+
+router.post('/training/:id/enroll',authenticate,(req,res)=>{ try{ const db=getDb(),prog=db.prepare('SELECT * FROM training_programs WHERE id=? AND is_active=1').get(req.params.id); if(!prog)return res.status(404).json({detail:'Program not found'}); if(prog.enrolled_count>=prog.max_participants)return res.status(400).json({detail:`Program is full. Only ${prog.max_participants} seats available.`}); const existing=db.prepare('SELECT id FROM training_enrollments WHERE program_id=? AND member_id=?').get(req.params.id,req.user.id); if(existing)return res.status(409).json({detail:'Already enrolled in this program'}); db.prepare('INSERT INTO training_enrollments (program_id,member_id) VALUES (?,?)').run(req.params.id,req.user.id); db.prepare('UPDATE training_programs SET enrolled_count=enrolled_count+1 WHERE id=?').run(req.params.id); notify(db,req.user.id,'🎓 Enrolled in Training!',`✅ You are enrolled in "${prog.title}" (${prog.duration_days} days). ${prog.location?'📍 Location: '+prog.location:''} ${prog.start_date?'📅 Start: '+prog.start_date:''}. Check your dashboard for materials.`,'training',prog.id,'training'); audit(db,req.user.id,'training_enroll','training_enrollment',req.params.id,`${prog.title}`); res.json({success:true,message:`Enrolled in ${prog.title}`,program:db.prepare('SELECT * FROM training_programs WHERE id=?').get(req.params.id)}); }catch(e){res.status(500).json({detail:e.message});} });
+// COORDINATOR: Get training programs with enrollment data
+router.get('/coordinator/training-programs',...requireCoordinator,(req,res)=>{ try{ const db=getDb(); const progs=db.prepare('SELECT tp.*, COUNT(te.id) as enrolled_count FROM training_programs tp LEFT JOIN training_enrollments te ON tp.id=te.program_id WHERE tp.is_active=1 GROUP BY tp.id ORDER BY tp.start_date ASC').all(); const results=progs.map(p=>({ ...p, seats_left: Math.max(0, p.max_participants - p.enrolled_count), enrollment_percentage: Math.round((p.enrolled_count / p.max_participants) * 100) })); res.json(results); }catch(e){res.status(500).json({detail:e.message});} });
+// COORDINATOR: Get enrollments for a specific training program
+router.get('/coordinator/training-programs/:id/enrollments',...requireCoordinator,(req,res)=>{ try{ const db=getDb(); const prog=db.prepare('SELECT * FROM training_programs WHERE id=?').get(req.params.id); if(!prog)return res.status(404).json({detail:'Program not found'}); const enrollments=db.prepare('SELECT te.id, te.enrolled_at, te.status, u.id as member_id, u.full_name, u.phone, mp.village, mp.district, mp.occupation FROM training_enrollments te JOIN users u ON te.member_id=u.id LEFT JOIN member_profiles mp ON u.id=mp.user_id WHERE te.program_id=? ORDER BY te.enrolled_at DESC').all(req.params.id); res.json({program:prog, total_enrolled: enrollments.length, seats_left: prog.max_participants - enrollments.length, enrollments}); }catch(e){res.status(500).json({detail:e.message});} });
 // SCHEMES
 router.get('/schemes',(req,res)=>{ const {category,search,page=1,limit=20}=req.query,db=getDb(); let q='SELECT * FROM government_schemes WHERE is_active=1',p=[]; if(category){q+=' AND category=?';p.push(category);} if(search){q+=' AND (name LIKE ? OR benefits LIKE ?)';const s=`%${search}%`;p.push(s,s);} const total=db.prepare(q.replace('SELECT *','SELECT COUNT(*) as c')).get(...p).c; res.json({items:db.prepare(q+` ORDER BY id ASC LIMIT ${limit} OFFSET ${(page-1)*limit}`).all(...p),total,page:Number(page),pages:Math.ceil(total/limit)}); });
 router.get('/schemes/my-applications',authenticate,(req,res)=>res.json(getDb().prepare("SELECT sa.*,gs.name as scheme_name,gs.category,gs.benefits,gs.ministry FROM scheme_applications sa JOIN government_schemes gs ON sa.scheme_id=gs.id WHERE sa.applicant_id=? ORDER BY sa.submission_date DESC").all(req.user.id)));
 router.post('/schemes/apply',authenticate,(req,res)=>{ try{ const {scheme_id,form_data={}}=req.body; if(!scheme_id)return res.status(400).json({detail:'scheme_id required'}); const db=getDb(); if(!db.prepare('SELECT id FROM government_schemes WHERE id=? AND is_active=1').get(scheme_id))return res.status(404).json({detail:'Scheme not found'}); const an=`GS-SCH-${new Date().getFullYear()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`; const id=db.prepare('INSERT INTO scheme_applications (scheme_id,applicant_id,application_number,form_data,ai_eligibility_score) VALUES (?,?,?,?,?)').run(scheme_id,req.user.id,an,JSON.stringify(form_data),Math.round(70+Math.random()*20)).lastInsertRowid; const sc=db.prepare('SELECT * FROM government_schemes WHERE id=?').get(scheme_id); notify(db,req.user.id,'📋 Application Submitted',`Application #${an} for "${sc.name}" submitted successfully.`,'scheme',id,'scheme'); audit(db,req.user.id,'scheme_apply','scheme_application',id,sc.name); res.status(201).json(db.prepare('SELECT * FROM scheme_applications WHERE id=?').get(id)); }catch(e){if(e.message.includes('UNIQUE'))return res.status(409).json({detail:'Already applied for this scheme'});res.status(500).json({detail:e.message});} });
 router.put('/schemes/applications/:id/status',...requireCoordinator,(req,res)=>{ const {status,remarks=''}=req.body; if(!['pending','under_review','approved','rejected'].includes(status))return res.status(400).json({detail:'Invalid status'}); const db=getDb(),app=db.prepare("SELECT sa.*,gs.name as scheme_name FROM scheme_applications sa JOIN government_schemes gs ON sa.scheme_id=gs.id WHERE sa.id=?").get(req.params.id); if(!app)return res.status(404).json({detail:'Not found'}); db.prepare("UPDATE scheme_applications SET status=?,remarks=? WHERE id=?").run(status,remarks,req.params.id); notify(db,app.applicant_id,`Scheme ${status==='approved'?'✅ Approved':status==='rejected'?'❌ Rejected':'Updated'}`,`Your application for "${app.scheme_name}" is now: ${status}.${remarks?' Note: '+remarks:''}`,'scheme',app.id,'scheme'); res.json({success:true,status}); });
+router.post('/schemes',...requireAdmin,(req,res)=>{ try{ const db=getDb(); const {name,category,description,benefits,eligibility_criteria,required_documents,application_url,max_benefit_amount,ministry}=req.body; if(!name)return res.status(400).json({detail:'Name is required'}); const id=db.prepare('INSERT INTO government_schemes (name,category,description,benefits,eligibility_criteria,required_documents,application_url,max_benefit_amount,ministry) VALUES (?,?,?,?,?,?,?,?,?)').run(name,category,description,benefits,JSON.stringify(eligibility_criteria||{}),JSON.stringify(required_documents||[]),application_url||'',max_benefit_amount||0,ministry||'').lastInsertRowid; res.status(201).json(db.prepare('SELECT * FROM government_schemes WHERE id=?').get(id)); }catch(e){res.status(500).json({detail:e.message});} });
+router.delete('/schemes/:id',...requireAdmin,(req,res)=>{ try{ getDb().prepare('UPDATE government_schemes SET is_active=0 WHERE id=?').run(req.params.id); res.json({success:true}); }catch(e){res.status(500).json({detail:e.message});} });
+router.post('/schemes/auto-fetch', ...requireAdmin, async (req, res) => {
+  try {
+    const prompt = `Generate a JSON array of 3 highly realistic Indian government schemes for rural empowerment. Output MUST be an array of objects matching this exact structure: [{ "name": "String", "category": "Finance"|"Agriculture"|"Housing"|"Livelihood"|"Health"|"Employment"|"Business", "description": "String", "benefits": "String", "ministry": "String", "max_benefit_amount": number, "eligibility_criteria": {"limit":"..."}, "required_documents": ["Aadhaar", "Passbook"] }]. Output ONLY valid raw JSON array starting with '[' without markdown blocks.`;
+    const response = await getAIResponse(prompt, [], 'en');
+    let schemes;
+    try { schemes = JSON.parse(response.trim().replace(/```json/g,'').replace(/```/g,'')); } catch(err) { return res.status(500).json({detail: 'Failed to parse AI response into JSON. ' + response.substring(0,60)}); }
+    const db = getDb(); let count = 0;
+    for(const s of schemes) {
+       db.prepare('INSERT INTO government_schemes (name,category,description,benefits,eligibility_criteria,required_documents,max_benefit_amount,ministry) VALUES (?,?,?,?,?,?,?,?)').run(s.name,s.category,s.description,s.benefits,JSON.stringify(s.eligibility_criteria||{}),JSON.stringify(s.required_documents||[]),s.max_benefit_amount||0,s.ministry||'');
+       count++;
+    }
+    res.json({success:true, count});
+  } catch(e) { res.status(500).json({detail: e.message}); }
+});
 // MARKETPLACE
 router.get('/marketplace/products',(req,res)=>{ const {category,search,page=1,limit=20,seller_id}=req.query,db=getDb(); let q="SELECT p.*,u.full_name as seller_name FROM products p JOIN users u ON p.seller_id=u.id WHERE p.is_active=1",p=[]; if(category){q+=' AND p.category=?';p.push(category);} if(search){q+=' AND p.name LIKE ?';p.push(`%${search}%`);} if(seller_id){q+=' AND p.seller_id=?';p.push(seller_id);} const cntQ=q.replace("SELECT p.*,u.full_name as seller_name FROM products p JOIN users u ON p.seller_id=u.id","SELECT COUNT(*) as c FROM products p JOIN users u ON p.seller_id=u.id"); const total=db.prepare(cntQ).get(...p).c; res.json({items:db.prepare(q+` ORDER BY p.created_at DESC LIMIT ${limit} OFFSET ${(page-1)*limit}`).all(...p),total,page:Number(page),pages:Math.ceil(total/limit)}); });
 router.get('/marketplace/products/:id',(req,res)=>{ const p=getDb().prepare('SELECT p.*,u.full_name as seller_name,u.phone as seller_phone FROM products p JOIN users u ON p.seller_id=u.id WHERE p.id=?').get(req.params.id); if(!p)return res.status(404).json({detail:'Not found'}); res.json(p); });
@@ -138,6 +210,31 @@ router.get('/marketplace/orders',authenticate,(req,res)=>{ const db=getDb(); con
 router.get('/marketplace/my-orders',authenticate,(req,res)=>{ const db=getDb(),orders=db.prepare("SELECT * FROM orders WHERE buyer_id=? ORDER BY created_at DESC").all(req.user.id); res.json(orders.map(o=>({...o,items:db.prepare('SELECT oi.*,p.name as product_name,p.image_emoji FROM order_items oi JOIN products p ON oi.product_id=p.id WHERE oi.order_id=?').all(o.id)}))); });
 router.put('/marketplace/orders/:id/status',authenticate,(req,res)=>{ try{ const {status}=req.body; if(!['placed','confirmed','shipped','delivered','cancelled'].includes(status))return res.status(400).json({detail:'Invalid status'}); const db=getDb(),order=db.prepare('SELECT * FROM orders WHERE id=?').get(req.params.id); if(!order)return res.status(404).json({detail:'Order not found'}); db.prepare("UPDATE orders SET status=?,updated_at=datetime('now') WHERE id=?").run(status,req.params.id); const m={confirmed:'Seller confirmed your order. It will be shipped soon!',shipped:'Your order is on the way!',delivered:'Order delivered! Thank you for supporting rural artisans 🌱',cancelled:'Your order has been cancelled.'}; if(order.buyer_id&&m[status])notify(db,order.buyer_id,`Order ${status.charAt(0).toUpperCase()+status.slice(1)}`,m[status],'order',order.id,'order'); res.json({success:true,status}); }catch(e){res.status(500).json({detail:e.message});} });
 // AI
+router.post('/ai/scheme-check', authenticate, async (req, res) => {
+	try {
+        const { scheme_id } = req.body;
+        const db = getDb();
+        const scheme = db.prepare('SELECT * FROM government_schemes WHERE id=?').get(scheme_id);
+        if(!scheme) return res.status(404).json({detail:'Scheme not found'});
+        const profile = db.prepare('SELECT p.*,u.full_name as name FROM member_profiles p JOIN users u ON p.user_id=u.id WHERE p.user_id=?').get(req.user.id);
+        const prompt = `Act as an expert village-level coordinator. The user "${profile?.name}" (Occupation: ${profile?.occupation||'N/A'}, Income: ${profile?.annual_income+' INR'||'N/A'}, District: ${profile?.district||'N/A'}, Credit Score: ${profile?.credit_score||'N/A'}) wants to know if they are eligible for the government scheme "${scheme.name}". 
+Scheme Benefits: ${scheme.benefits}
+Scheme Eligibility: ${scheme.eligibility_criteria}
+Required Documents: ${scheme.required_documents}
+
+Write a short, friendly, personalized 2-paragraph response explaining: 
+1. Are they likely eligible based on their profile data? 
+2. What are the specific next steps and documents they should gather?
+Keep the language extremely simple and empowering. Avoid legal jargon.`;
+        const lang = req.body.language || req.body.lang;
+        const reply = await getAIResponse(prompt, [], lang);
+        res.json({ reply });
+	} catch (e) {
+		console.error('[api] /ai/scheme-check error', e);
+		res.status(500).json({ detail: e.message || 'AI error' });
+	}
+});
+
 router.post('/ai/chat', authenticate, async (req, res) => {
 	try {
 		const { message, conversation_history = [] } = req.body;
@@ -159,7 +256,13 @@ router.post('/ai/chat', authenticate, async (req, res) => {
 		} catch (aiErr) {
 			console.error('[api] /ai/chat error', aiErr && aiErr.message, aiErr);
 			const status = (aiErr && (aiErr.status || aiErr.statusCode)) ? (aiErr.status || aiErr.statusCode) : 500;
-			return res.status(status).json({ detail: aiErr.message });
+			const detail = aiErr?.message || 'AI service unavailable';
+			const isMissingKey = detail.includes('No GROQ key') || detail.includes('No Gemini key');
+			const userMessage = isMissingKey 
+				? 'AI service not configured. Please set up API keys (GROQ_API_KEY or GEMINI_API_KEY in .env)'
+				: detail;
+			console.error(`[api] /ai/chat response: status=${status}, message="${userMessage}"`);
+			return res.status(status).json({ detail: userMessage });
 		}
 	} catch (e) {
 		console.error('[api] /ai/chat outer', e && e.message);
@@ -245,7 +348,8 @@ router.post('/ai/tts', authenticate, async (req, res) => {
 		console.error('tts route error', e && e.message)
 		res.status(500).json({ detail: e.message })
 	}
-})
+});
+
 router.get('/ai/chat/history',authenticate,(req,res)=>res.json(getDb().prepare('SELECT * FROM ai_conversations WHERE user_id=? ORDER BY created_at DESC LIMIT 20').all(req.user.id)));
 router.post('/ai/health',authenticate,async(req,res)=>{ try{ const {query}=req.body; if(!query?.trim())return res.status(400).json({detail:'query required'}); const response=await getHealthResponse(query.trim()); const q=query.toLowerCase(),cat=q.match(/pregnant|maternal/)?'maternal':q.match(/food|eat|nutrition/)?'nutrition':q.match(/mental|stress/)?'mental':q.match(/child|baby|vaccine/)?'child':'general'; const db=getDb(),id=db.prepare('INSERT INTO health_queries (user_id,query_text,response,category) VALUES (?,?,?,?)').run(req.user.id,query.trim(),response,cat).lastInsertRowid; res.json(db.prepare('SELECT * FROM health_queries WHERE id=?').get(id)); }catch(e){res.status(500).json({detail:e.message});} });
 router.get('/ai/health/history',authenticate,(req,res)=>res.json(getDb().prepare('SELECT * FROM health_queries WHERE user_id=? ORDER BY created_at DESC LIMIT 20').all(req.user.id)));

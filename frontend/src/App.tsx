@@ -58,7 +58,7 @@ export default function App() {
   return (
     <QueryClientProvider client={qc}>
       <ErrorBoundary>
-        <BrowserRouter>
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <AppRoutes/>
           <Toaster position="top-right" toastOptions={{
             duration: 4000,

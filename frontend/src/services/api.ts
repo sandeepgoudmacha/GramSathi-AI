@@ -1,11 +1,7 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
 
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `${import.meta.env.VITE_API_URL}/api/v1`
-  : '/api/v1'
-
-export const api = axios.create({ baseURL: API_BASE, timeout: 30000 })
+export const api = axios.create({ baseURL: '/api/v1', timeout: 30000 })
 
 api.interceptors.request.use(cfg => {
   const t = localStorage.getItem('access_token')
@@ -44,6 +40,7 @@ export const loansApi = {
   get:      (id: number)       => api.get(`/loans/${id}`),
   review:   (id: number, d: any) => api.post(`/loans/${id}/review`, d),
   payEmi:   (id: number, month: number) => api.post(`/loans/${id}/pay-emi`, { month_number: month }),
+  documents: (id: number) => api.get(`/loans/${id}/documents`),
 }
 export const savingsApi = {
   get:    (memberId?: number) => api.get('/savings', { params: memberId ? { member_id: memberId } : {} }),
@@ -62,8 +59,12 @@ export const skillsApi = {
 }
 export const trainingApi = {
   list:   () => api.get('/training'),
-  enroll: (id: number) => api.post(`/training/enroll/${id}`),
+  enroll: (id: number) => api.post(`/training/${id}/enroll`),
+  myEnrollments: () => api.get('/training/my-enrollments'),
   create: (d: any) => api.post('/training', d),
+  // Coordinator endpoints
+  allPrograms: () => api.get('/coordinator/training-programs'),
+  programEnrollments: (id: number) => api.get(`/coordinator/training-programs/${id}/enrollments`),
 }
 export const schemesApi = {
   list:           (p?: any) => api.get('/schemes', { params: p }),
@@ -71,6 +72,9 @@ export const schemesApi = {
   apply:          (d: any)  => api.post('/schemes/apply', d),
   myApplications: ()        => api.get('/schemes/my-applications'),
   review:         (id: number, d: any) => api.put(`/schemes/applications/${id}/review`, d),
+  create:         (d: any)  => api.post('/schemes', d),
+  delete:         (id: number) => api.delete(`/schemes/${id}`),
+  autoFetch:      ()        => api.post('/schemes/auto-fetch'),
 }
 export const marketplaceApi = {
   products:      (p?: any)           => api.get('/marketplace/products', { params: p }),
@@ -91,11 +95,12 @@ export const aiApi = {
   healthHistory:()       => api.get('/ai/health/history'),
   livelihoods:  ()       => api.get('/ai/livelihoods'),
   tts:          (d: any) => api.post('/ai/tts', d, { responseType: 'arraybuffer', timeout: 120000 }),
+  schemeCheck:  (d: any) => api.post('/ai/scheme-check', d),
 }
 export const notificationsApi = {
   list:       () => api.get('/notifications'),
   markRead:   (id: number) => api.put(`/notifications/${id}/read`),
-  markAllRead:() => api.put('/notifications/read-all'),
+  markAllRead:() => api.put('/notifications/mark-all-read'),
 }
 export const usersApi = {
   me:         () => api.get('/auth/me'),
