@@ -3,10 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { motion } from 'framer-motion'
 import { Plus, Search, Loader2, CheckCircle, TrendingUp, ExternalLink } from 'lucide-react'
-import axios from 'axios'
 import { AppShell } from '@/components/layout/AppShell'
 import { StatCard, CreditGauge, ProgressBar, DataTable, EmptyState, Spinner, Modal, Tabs, Timeline, Field, InfoBanner } from '@/components/ui/index'
-import { dashboardApi, loansApi, savingsApi, schemesApi, skillsApi, trainingApi, aiApi, creditApi } from '@/services/api'
+import { api, dashboardApi, loansApi, savingsApi, schemesApi, skillsApi, trainingApi, aiApi, creditApi } from '@/services/api'
 import { inr, fdate, ago, loanStatusBadge, schemeStatusBadge, creditColor } from '@/utils/helpers'
 import { useAuthStore } from '@/store/index'
 import { useForm } from 'react-hook-form'
@@ -173,7 +172,7 @@ export function FinancialPage() {
       formData.append('collateral', d.collateral || 'None');
       if (d.bank_passbook?.[0]) formData.append('bank_passbook', d.bank_passbook[0]);
       if (d.aadhaar?.[0]) formData.append('aadhaar', d.aadhaar[0]);
-      return axios.post('/api/v1/loans/apply', formData, { headers: { 'Content-Type': 'multipart/form-data', 'Authorization': `Bearer ${localStorage.getItem('access_token')}` } });
+      return api.post('/loans/apply', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
     },
     onSuccess: () => { toast.success('Loan application submitted!'); setLoanModal(false); reset(); qc.invalidateQueries({queryKey:['my-loans']}); qc.invalidateQueries({queryKey:['dashboard']}) },
     onError: (e:any) => toast.error(e.response?.data?.detail || 'Failed to apply'),
