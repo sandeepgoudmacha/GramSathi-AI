@@ -1,7 +1,11 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
 
-export const api = axios.create({ baseURL: '/api/v1', timeout: 30000 })
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api/v1`
+  : '/api/v1'
+
+export const api = axios.create({ baseURL: API_BASE, timeout: 30000 })
 
 api.interceptors.request.use(cfg => {
   const t = localStorage.getItem('access_token')

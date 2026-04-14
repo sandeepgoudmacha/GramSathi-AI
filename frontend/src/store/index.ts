@@ -84,11 +84,20 @@ export const useWSStore = create<WSState>((set, get) => ({
     const existing = get().ws
     if (existing && existing.readyState === WebSocket.OPEN) return
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    // Use the current page port so dev connects via Vite (which proxies /ws to backend)
-    const port = window.location.port || (import.meta.env.DEV ? '5173' : '')
-    const host = window.location.hostname
-    const url = `${protocol}//${host}:${port}/ws?token=${token}`
+    const apiUrl = import.meta.env.VITE_API_URL as string | undefined
+    let url: string
+    if (apiUrl) {
+      // Production: connect directly to the deployed backend
+      const parsed = new URL(apiUrl)
+      const wsProto = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
+      url = `${wsProto}//${parsed.host}/ws?token=${token}`
+    } else {
+      // Development: use Vite proxy (/ws → localhost backend)
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const port = window.location.port || (import.meta.env.DEV ? '5173' : '')
+      const host = window.location.hostname
+      url = `${protocol}//${host}:${port}/ws?token=${token}`
+    }
 
     let reconnectTimer: ReturnType<typeof setTimeout>|null = null
 
