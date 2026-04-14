@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { marketplaceApi } from '@/services/api'
+import { marketplaceApi, resolveImageUrl } from '@/services/api'
 import { Modal, Spinner, EmptyState } from '@/components/ui'
 import { inr } from '@/utils/helpers'
 import toast from 'react-hot-toast'
@@ -44,10 +44,10 @@ export default function Marketplace() {
     return (
       <div className="grid grid-cols-2 gap-3">
         {items.map((r: any) => {
-          const img = (() => { try { return r.images ? (Array.isArray(r.images)?r.images[0]:JSON.parse(r.images||'[]')[0]) : (r.image||r.image_emoji) } catch { return r.image||r.image_emoji } })()
+          const img = resolveImageUrl((() => { try { return r.images ? (Array.isArray(r.images)?r.images[0]:JSON.parse(r.images||'[]')[0]) : (r.image||r.image_emoji) } catch { return r.image||r.image_emoji } })())
           return (
             <div key={r.id} className="p-2 border rounded-lg bg-gray-50">
-              <div className="h-20 mb-2 overflow-hidden flex items-center justify-center">{img ? <img src={img} className="w-full h-full object-cover" alt={r.name}/> : <div className="text-sm">No image</div>}</div>
+              <div className="h-20 mb-2 overflow-hidden flex items-center justify-center">{img && (img.startsWith('http')||img.startsWith('/uploads')) ? <img src={img} className="w-full h-full object-cover" alt={r.name}/> : img ? <div className="text-2xl">{img}</div> : <div className="text-sm">No image</div>}</div>
               <div className="text-sm font-semibold truncate">{r.name}</div>
               <div className="text-sm text-brand-600 font-bold">{inr(r.price)}</div>
               <div className="mt-2 flex gap-2">
@@ -107,11 +107,11 @@ export default function Marketplace() {
             // resolve image safely
             let img = null
             try { if (p.images) img = Array.isArray(p.images) ? p.images[0] : JSON.parse(p.images||'[]')[0] } catch {}
-            img = img || p.image || p.image_emoji || null
+            img = resolveImageUrl(img || p.image || p.image_emoji || null)
             return (
             <div key={p.id} className="bg-white/5 border border-white/8 rounded-2xl p-4 flex flex-col">
               <div onClick={()=>openDetail(p)} className="h-40 mb-3 bg-gray-100/10 rounded-lg flex items-center justify-center text-sm overflow-hidden cursor-pointer">
-                {img ? <img src={img} alt={p.title||p.name} className="w-full h-full object-cover"/> : <div className="text-xs text-white/50">No image</div>}
+                {img && (img.startsWith('http')||img.startsWith('/uploads')) ? <img src={img} alt={p.title||p.name} className="w-full h-full object-cover"/> : img ? <div className="text-4xl">{img}</div> : <div className="text-xs text-white/50">No image</div>}
               </div>
               <div className="flex-1">
                 <div onClick={()=>openDetail(p)} className="font-semibold text-white truncate mb-1 cursor-pointer">{p.title || p.name}</div>
@@ -159,7 +159,7 @@ export default function Marketplace() {
           <div className="grid md:grid-cols-3 gap-4">
             <div className="md:col-span-1">
               <div className="h-64 bg-gray-100 rounded-lg overflow-hidden mb-3 flex items-center justify-center">
-                {(() => { try { const imgs = selectedDetail.images ? (Array.isArray(selectedDetail.images)?selectedDetail.images:JSON.parse(selectedDetail.images||'[]')) : []; const m = imgs[0] || selectedDetail.image || selectedDetail.image_emoji; return m ? <img src={m} className="w-full h-full object-cover" alt={selectedDetail.name}/> : <div className="text-black">No image</div> } catch { return <div className="text-black">No image</div> } })()}
+                {(() => { try { const imgs = selectedDetail.images ? (Array.isArray(selectedDetail.images)?selectedDetail.images:JSON.parse(selectedDetail.images||'[]')) : []; const m = resolveImageUrl(imgs[0] || selectedDetail.image || selectedDetail.image_emoji); return m && (m.startsWith('http')||m.startsWith('/uploads')) ? <img src={m} className="w-full h-full object-cover" alt={selectedDetail.name}/> : m ? <div className="text-6xl flex items-center justify-center h-full">{m}</div> : <div className="text-black">No image</div> } catch { return <div className="text-black">No image</div> } })()}
               </div>
               <div className="space-y-2 text-sm text-black">
                 <div><strong>Seller:</strong> {selectedDetail.seller_name || '—'}</div>

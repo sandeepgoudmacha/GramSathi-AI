@@ -2,6 +2,7 @@ import axios from 'axios'
 import toast from 'react-hot-toast'
 
 const _apiBase = import.meta.env.VITE_API_BASE_URL as string | undefined
+export const BACKEND_BASE = _apiBase != null && _apiBase !== '' ? _apiBase : ''
 const API_BASE = _apiBase != null && _apiBase !== ''
   ? `${_apiBase}/api/v1`
   : '/api/v1'
@@ -125,6 +126,12 @@ export const uploadApi = {
     return api.post('/upload', f, { headers: { 'Content-Type': 'multipart/form-data' } })
   },
 }
+export function resolveImageUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  if (url.startsWith('/uploads')) return BACKEND_BASE + url
+  return url
+}
+
 export const statsApi = {
   public: () => api.get('/stats/public'),
 }

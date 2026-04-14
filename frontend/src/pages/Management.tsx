@@ -5,7 +5,7 @@ import { motion } from 'framer-motion'
 import { Search, Plus, Send, Loader2, ShoppingCart, X, CheckCircle } from 'lucide-react'
 import { AppShell } from '@/components/layout/AppShell'
 import { StatCard, DataTable, EmptyState, Spinner, Modal, ProgressBar, Tabs, CreditGauge, InfoBanner, Timeline, Field } from '@/components/ui/index'
-import { aiApi, marketplaceApi, loansApi, savingsApi, dashboardApi, usersApi, trainingApi, meetingsApi, schemesApi, creditApi, uploadApi, adminApi } from '@/services/api'
+import { aiApi, marketplaceApi, loansApi, savingsApi, dashboardApi, usersApi, trainingApi, meetingsApi, schemesApi, creditApi, uploadApi, adminApi, BACKEND_BASE, resolveImageUrl } from '@/services/api'
 import { inr, fdate, ago, loanStatusBadge, orderStatusBadge, schemeStatusBadge, creditColor, initials } from '@/utils/helpers'
 import { useAuthStore } from '@/store/index'
 import { useForm } from 'react-hook-form'
@@ -153,7 +153,7 @@ export function MarketplacePage() {
         const urls: string[] = []
         for (const f of imagesFiles) {
           const res = await uploadApi.file(f)
-          urls.push(res.data.url)
+          urls.push(resolveImageUrl(res.data.url) || res.data.url)
         }
         payload.images = urls
       }
@@ -206,11 +206,11 @@ export function MarketplacePage() {
           {isLoading ? <Spinner/> : (
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
               {(products?.items||[]).map((p:any,i:number) => {
-                const img = JSON.parse(p.images||'[]')[0]
+                const img = resolveImageUrl((() => { try { return JSON.parse(p.images||'[]')[0] } catch { return null } })())
                 return (
                   <motion.div key={p.id} initial={{opacity:0,scale:0.97}} animate={{opacity:1,scale:1}} transition={{delay:i*0.03}} className="card overflow-hidden hover:shadow-md hover:-translate-y-0.5 transition-all group">
                     <div className="h-32 bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center text-4xl group-hover:scale-105 transition-transform">
-                      {img?.startsWith('/uploads') ? <img src={img} className="w-full h-full object-cover" alt={p.name}/> : img||'📦'}
+                      {img && (img.startsWith('http') || img.startsWith('/uploads')) ? <img src={img} className="w-full h-full object-cover" alt={p.name}/> : img||'📦'}
                     </div>
                     <div className="p-3">
                       <p className="text-sm font-semibold text-gray-800 truncate">{p.name}</p>
@@ -236,10 +236,10 @@ export function MarketplacePage() {
             <DataTable
               headers={['Product','Price','Stock','Sold','Rating','Status','Action']}
               rows={(products?.items||[]).filter((p:any)=>p.seller_id===user?.id).map((p:any) => {
-                const firstImg = (() => { try { return JSON.parse(p.images||'[]')[0] } catch { return null } })()
+                const firstImg = resolveImageUrl((() => { try { return JSON.parse(p.images||'[]')[0] } catch { return null } })())
                 return [
                   <div className="flex items-center gap-2">
-                    {firstImg && typeof firstImg === 'string' && firstImg.startsWith('/uploads')
+                    {firstImg && typeof firstImg === 'string' && (firstImg.startsWith('http') || firstImg.startsWith('/uploads'))
                       ? <img src={firstImg} className="w-10 h-10 object-cover rounded" alt={p.name} />
                       : <span className="text-xl">{firstImg || '📦'}</span>
                     }
@@ -346,7 +346,7 @@ export function MarketplacePage() {
         <div className="space-y-2 mb-4">
           {cart.map(item => (
             <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
-              <div className="text-3xl">{JSON.parse(item.images||'[]')[0]||'📦'}</div>
+              {(() => { const cartImg = resolveImageUrl((() => { try { return JSON.parse(item.images||'[]')[0] } catch { return null } })()); return cartImg && (cartImg.startsWith('http') || cartImg.startsWith('/uploads')) ? <img src={cartImg} className="w-10 h-10 object-cover rounded-lg" alt={item.name}/> : <div className="text-3xl">{cartImg||'📦'}</div> })()}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold truncate">{item.name}</p>
                 <div className="flex items-center gap-2 mt-1">
@@ -1317,7 +1317,7 @@ function AdminMarketplace() {
       <DataTable
         headers={['Product','Seller','Price','Stock','Status','Action']}
         rows={items.map((p:any)=>[
-          <div className="flex items-center gap-2"><div className="text-xl">{(() => { try { return p.images? (Array.isArray(p.images)?p.images[0]:JSON.parse(p.images||'[]')[0]) : p.image || p.image_emoji } catch { return p.image||p.image_emoji } })()}</div><div className="font-semibold text-sm">{p.name}</div></div>,
+          <div className="flex items-center gap-2">{(() => { try { const raw = p.images? (Array.isArray(p.images)?p.images[0]:JSON.parse(p.images||'[]')[0]) : p.image || p.image_emoji; const resolved = resolveImageUrl(raw) || raw; return resolved && (resolved.startsWith('http')||resolved.startsWith('/uploads')) ? <img src={resolved} className="w-8 h-8 object-cover rounded" alt={p.name}/> : <div className="text-xl">{resolved}</div> } catch { return <div className="text-xl">{p.image||p.image_emoji}</div> } })()}<div className="font-semibold text-sm">{p.name}</div></div>,
           p.seller_name||'—',
           <span className="font-bold text-brand-600">{inr(p.price)}</span>,
           p.stock,
@@ -1334,7 +1334,7 @@ function AdminMarketplace() {
       <Modal open={!!view} onClose={()=>setView(null)} title={view?.name||'Product'}>
         {view && (
           <div>
-            <div className="h-48 mb-3 overflow-hidden rounded-lg">{(() => { try { const imgs = view.images ? (Array.isArray(view.images)?view.images:view.images?JSON.parse(view.images||'[]'):[]) : []; const m = imgs[0] || view.image || view.image_emoji; return m ? <img src={m} className="w-full h-full object-cover" alt={view.name}/> : <div className="text-gray-400">No image</div> } catch { return <div className="text-gray-400">No image</div> } })()}</div>
+            <div className="h-48 mb-3 overflow-hidden rounded-lg">{(() => { try { const imgs = view.images ? (Array.isArray(view.images)?view.images:JSON.parse(view.images||'[]')) : []; const m = resolveImageUrl(imgs[0] || view.image || view.image_emoji); return m && (m.startsWith('http')||m.startsWith('/uploads')) ? <img src={m} className="w-full h-full object-cover" alt={view.name}/> : m ? <div className="text-gray-400 text-6xl flex items-center justify-center h-full">{m}</div> : <div className="text-gray-400">No image</div> } catch { return <div className="text-gray-400">No image</div> } })()}</div>
             <p className="font-semibold mb-2">{view.name}</p>
             <p className="text-sm text-gray-600 mb-2">{view.description}</p>
             <div className="flex gap-2"><button onClick={()=>updateMutation.mutate({id:view.id,d:{is_active:view.is_active?0:1}})} className="btn-primary btn-sm">{view.is_active?'Deactivate':'Activate'}</button><button onClick={()=>{deleteMutation.mutate(view.id); setView(null)}} className="btn-danger btn-sm">Delete</button></div>
