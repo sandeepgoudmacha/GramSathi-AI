@@ -1,8 +1,9 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)
-  ? `${import.meta.env.VITE_API_BASE_URL}/api/v1`
+const _apiBase = import.meta.env.VITE_API_BASE_URL as string | undefined
+const API_BASE = _apiBase != null && _apiBase !== ''
+  ? `${_apiBase}/api/v1`
   : '/api/v1'
 
 export const api = axios.create({ baseURL: API_BASE, timeout: 30000 })

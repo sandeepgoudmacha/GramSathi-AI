@@ -172,7 +172,7 @@ export function FinancialPage() {
       formData.append('collateral', d.collateral || 'None');
       if (d.bank_passbook?.[0]) formData.append('bank_passbook', d.bank_passbook[0]);
       if (d.aadhaar?.[0]) formData.append('aadhaar', d.aadhaar[0]);
-      return api.post('/loans/apply', formData, { headers: { 'Content-Type': 'multipart/form-data', 'Authorization': `Bearer ${localStorage.getItem('access_token')}` } });
+      return api.post('/loans/apply', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
     },
     onSuccess: () => { toast.success('Loan application submitted!'); setLoanModal(false); reset(); qc.invalidateQueries({queryKey:['my-loans']}); qc.invalidateQueries({queryKey:['dashboard']}) },
     onError: (e:any) => toast.error(e.response?.data?.detail || 'Failed to apply'),
